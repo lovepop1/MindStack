@@ -225,9 +225,14 @@ Format your response in clear Markdown.`;
                         text: `## Retrieved Context\n\n${contextText}\n\n---\n\n## Question\n${current_query}`,
                     });
                 } else {
+                    // No captures ingested yet — tell Claude explicitly so it doesn't hallucinate
                     userContent.push({
                         type: "text",
-                        text: current_query,
+                        text: `No captures have been ingested into MindStack yet for this project. 
+                        
+Please inform the user that there is no activity data available yet, and guide them to start capturing data using the MindStack browser extension or IDE plugin.
+
+User's question was: ${current_query}`,
                     });
                 }
 

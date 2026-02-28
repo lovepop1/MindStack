@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAuthClient, extractJwt } from "@/lib/supabase";
+import { getPresignedGetUrl } from "@/lib/s3";
 
 interface RouteParams {
     params: { project_id: string };
@@ -8,6 +9,8 @@ interface RouteParams {
 // ---------------------------------------------------------------------------
 // GET /api/projects/[project_id]/captures
 // Returns all captures + their attachments for a given project.
+// Attachment s3_url values are replaced with 1-hour pre-signed GET URLs so
+// the private S3 bucket never returns 403 to the browser.
 // Ordered by created_at DESC for timeline rendering.
 // RLS ensures the user can only see their own project's data.
 // ---------------------------------------------------------------------------
@@ -54,7 +57,32 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
             return NextResponse.json({ error: error.message }, { status: 500 });
         }
 
-        return NextResponse.json({ captures: data });
+        // Replace each attachment's stored raw S3 URL with a fresh pre-signed
+        // GET URL (1-hour TTL). Run per-capture in parallel for performance.
+        const captures = data ?? [];
+        await Promise.all(
+            captures.map(async (capture) => {
+                const attachments = (capture.capture_attachments as Array<{ s3_url: string }>) ?? [];
+                await Promise.all(
+                    attachments.map(async (att) => {
+                        if (att.s3_url) {
+                            try {
+                                att.s3_url = await getPresignedGetUrl(att.s3_url);
+                            } catch (signErr) {
+                                console.warn(
+                                    `[GET /api/projects/${project_id}/captures] Failed to sign URL: ${att.s3_url}`,
+                                    signErr
+                                );
+                                // Leave the original URL — the browser will see a 403, but
+                                // one failed signature won't break the whole response.
+                            }
+                        }
+                    })
+                );
+            })
+        );
+
+        return NextResponse.json({ captures });
     } catch (err) {
         if (err instanceof Response) return err;
         console.error(`[GET /api/projects/${params?.project_id}/captures]`, err);

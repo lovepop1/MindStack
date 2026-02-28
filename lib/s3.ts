@@ -110,6 +110,26 @@ export async function fetchImageAsBase64(
 }
 
 // ---------------------------------------------------------------------------
+// Generate a pre-signed GET URL (1 hour) from a stored raw S3 URL.
+// Extracts the object key from the URL so the DB doesn't need a separate key column.
+// ---------------------------------------------------------------------------
+export async function getPresignedGetUrl(s3Url: string): Promise<string> {
+    const url = new URL(s3Url);
+    let key: string;
+    if (url.hostname.startsWith(`${BUCKET}.`)) {
+        // Virtual-hosted style: bucket.s3.region.amazonaws.com/<key>
+        key = url.pathname.slice(1);
+    } else {
+        // Path-style: s3.region.amazonaws.com/<bucket>/<key>
+        const parts = url.pathname.split("/");
+        key = parts.slice(2).join("/");
+    }
+
+    const cmd = new GetObjectCommand({ Bucket: BUCKET, Key: key });
+    return getSignedUrl(s3, cmd, { expiresIn: 3600 });
+}
+
+// ---------------------------------------------------------------------------
 // Minimal MIME type inference by file extension as a fallback
 // ---------------------------------------------------------------------------
 function inferMimeType(key: string): string {
