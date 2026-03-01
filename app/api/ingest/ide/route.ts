@@ -90,6 +90,7 @@ export async function POST(req: NextRequest) {
         // -- Async: Pipeline -----------------------------------------------------
         processIdeAsync({
             capture_id,
+            project_id,
             capture_type,
             ide_error_log: ide_error_log ?? "",
             ide_code_diff: ide_code_diff ?? "",
@@ -112,6 +113,7 @@ export async function POST(req: NextRequest) {
 // ---------------------------------------------------------------------------
 async function processIdeAsync(args: {
     capture_id: string;
+    project_id: string;
     capture_type: IdeCaptureType;
     ide_error_log: string;
     ide_code_diff: string;
@@ -180,6 +182,7 @@ ${rawContent.slice(0, 15000)}`;
 
     const chunkRows: {
         capture_id: string;
+        project_id: string;
         chunk_text: string;
         embedding: number[];
         chunk_index: number;
@@ -190,6 +193,7 @@ ${rawContent.slice(0, 15000)}`;
             const embedding = await invokeTitanEmbedding(allTextChunks[i]);
             chunkRows.push({
                 capture_id: args.capture_id,
+                project_id: args.project_id,
                 chunk_text: allTextChunks[i],
                 embedding,
                 chunk_index: i,

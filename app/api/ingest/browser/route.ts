@@ -120,6 +120,7 @@ export async function POST(req: NextRequest) {
         // -- Async: Embed pipeline (fire-and-forget) ----------------------------
         processBrowserCaptureAsync({
             capture_id,
+            project_id,
             capture_type,
             text_content: text_content ?? "",
             source_url: source_url ?? "",
@@ -142,6 +143,7 @@ export async function POST(req: NextRequest) {
 // ---------------------------------------------------------------------------
 async function processBrowserCaptureAsync(args: {
     capture_id: string;
+    project_id: string;
     capture_type: BrowserCaptureType;
     text_content: string;
     source_url: string;
@@ -228,6 +230,7 @@ async function processBrowserCaptureAsync(args: {
 
     const chunkRows: {
         capture_id: string;
+        project_id: string;
         chunk_text: string;
         embedding: number[];
         chunk_index: number;
@@ -238,6 +241,7 @@ async function processBrowserCaptureAsync(args: {
             const embedding = await invokeTitanEmbedding(chunks[i]);
             chunkRows.push({
                 capture_id: args.capture_id,
+                project_id: args.project_id,
                 chunk_text: chunks[i],
                 embedding,
                 chunk_index: i,
