@@ -6,7 +6,7 @@ import {
     ClaudeContentBlock,
     ClaudeMessage,
 } from "@/lib/bedrock";
-import { fetchImageAsBase64 } from "@/lib/s3";
+import { fetchImageAsBase64, getPresignedGetUrl } from "@/lib/s3";
 
 // ---------------------------------------------------------------------------
 // POST /api/chat
@@ -151,6 +151,24 @@ export async function POST(req: NextRequest) {
                 // ----------------------------------------------------------------
                 const allS3Urls: string[] = [];
                 const mediaPayloads: { base64: string; mimeType: string; isPdf: boolean }[] = [];
+
+                // Pre-sign URLs concurrently for performance before emitting sources
+                await Promise.all(
+                    captures.map(async (capture) => {
+                        const attachments = capture.capture_attachments ?? [];
+                        await Promise.all(
+                            attachments.map(async (att) => {
+                                if (att.s3_url) {
+                                    try {
+                                        att.s3_url = await getPresignedGetUrl(att.s3_url);
+                                    } catch (err) {
+                                        console.warn(`[chat] Failed to sign URL: ${att.s3_url}`, err);
+                                    }
+                                }
+                            })
+                        );
+                    })
+                );
 
                 for (const capture of captures) {
                     for (const att of capture.capture_attachments) {
