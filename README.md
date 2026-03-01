@@ -47,6 +47,7 @@ For massive file inputs (e.g. PDFs). A client uploads the PDF securely to S3 via
 ### 4. YouTube Transcript Microservice (`python-service/`)
 Due to strict Vercel routing rules and YouTube's advanced bot-protection against Node.js HTTPS engines, MindStack delegates YouTube transcription to a standalone Python FastAPI microservice.
 This service is fully isolated to prevent Next.js `app/api/` routing conflicts and guarantees reliable, bypass-capable transcript extraction.
+**[Youtube Transcript Repository](https://github.com/lovepop1/MindStack-Transcripter)**
 
 ---
 
