@@ -44,6 +44,10 @@ Accepts strictly scoped payloads from a local code-editor extension:
 ### 3. Document Processing (`POST /api/ingest/process-document`)
 For massive file inputs (e.g. PDFs). A client uploads the PDF securely to S3 via a presigned URL. The backend fetches the raw byte buffer from S3, parses the native text via `pdf-parse`, chunks the content aggressively, and creates embedded vectors tied strictly to an isolated `project_id`.
 
+### 4. YouTube Transcript Microservice (`python-service/`)
+Due to strict Vercel routing rules and YouTube's advanced bot-protection against Node.js HTTPS engines, MindStack delegates YouTube transcription to a standalone Python FastAPI microservice.
+This service is fully isolated to prevent Next.js `app/api/` routing conflicts and guarantees reliable, bypass-capable transcript extraction.
+
 ---
 
 ## 💻 Getting Started (Local Development)
@@ -53,6 +57,7 @@ Create a `.env.local` file at the root of the project. You will need:
 - Supabase Project URL, Anon Key, and Service Role Key (Required for database & JWT auth).
 - AWS Credentials (Access Key & Secret Key) with permissions for S3 (`PutObject`, `GetObject`) and Bedrock (`InvokeModel`, `InvokeModelWithResponseStream`).
 - AWS Region & S3 Bucket Name.
+- `PYTHON_API_URL`: The URL of your independently deployed Python Microservice (e.g. `https://mindstack-python-scraper.vercel.app`).
 
 *(Ensure the Supabase schema includes the `captures` and `capture_chunks` tables with the `project_id` foreign key relations fully intact).*
 
@@ -68,7 +73,14 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-### 4. Build for Production
+### 4. Deploying the Python Microservice 
+To deploy the Python extraction layer:
+1. Create a **New Project** in Vercel.
+2. Link the repository but explicitly set the **Root Directory** to `python-service`.
+3. Deploy this project. It will automatically build as a Serverless Python app.
+4. Add the resulting URL as `PYTHON_API_URL` in the environment variables of your **originating Next.js project**.
+
+### 5. Build for Production
 To ensure all dynamic APIs and static pages are optimized:
 ```bash
 npm run build
