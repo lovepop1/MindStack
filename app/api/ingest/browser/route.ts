@@ -126,6 +126,7 @@ export async function POST(req: NextRequest) {
             source_url: source_url ?? "",
             video_start_time,
             video_end_time,
+            attachments,
         }).catch((err) =>
             console.error(`[ingest/browser] Async pipeline failed for ${capture_id}:`, err)
         );
@@ -149,6 +150,7 @@ async function processBrowserCaptureAsync(args: {
     source_url: string;
     video_start_time?: number;
     video_end_time?: number;
+    attachments?: { file_type: string; file_name: string }[];
 }): Promise<void> {
     const admin = createAdminClient();
     let fullText = args.text_content;
@@ -188,6 +190,16 @@ async function processBrowserCaptureAsync(args: {
                 transcriptErr
             );
         }
+    }
+
+    // -- Step 1.5: Append Media Metadata for RAG ------------------------------
+    // If the capture has images or PDFs, append a textual description so the embedder 
+    // knows this capture contains visual media. This fixes "blind" RAG image searches.
+    if (args.attachments && args.attachments.length > 0) {
+        const mediaDescriptions = args.attachments.map(
+            (att) => `[Attached Media: ${att.file_name} (${att.file_type})]`
+        );
+        fullText += `\n\n${mediaDescriptions.join("\n")}`;
     }
 
     if (!fullText || fullText.trim().length === 0) {

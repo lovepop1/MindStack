@@ -114,6 +114,7 @@ export async function POST(req: NextRequest) {
                     id: string;
                     session_id: string;
                     capture_type: string;
+                    page_title: string | null;
                     ai_markdown_summary: string | null;
                     ide_code_diff: string | null;
                     ide_error_log: string | null;
@@ -131,7 +132,7 @@ export async function POST(req: NextRequest) {
                     const { data, error: captureErr } = await supabase
                         .from("captures")
                         .select(
-                            `id, session_id, capture_type, ai_markdown_summary,
+                            `id, session_id, capture_type, page_title, ai_markdown_summary,
                ide_code_diff, ide_error_log, source_url,
                sessions ( active_file_context ),
                capture_attachments ( s3_url, file_type, file_name )`
@@ -180,37 +181,52 @@ export async function POST(req: NextRequest) {
                 // ----------------------------------------------------------------
                 const contextParts: string[] = [];
 
-                for (const chunk of chunks) {
-                    contextParts.push(`[Relevant Chunk]\n${chunk.chunk_text}`);
-                }
+                captures.forEach((capture, idx) => {
+                    const captureBlock: string[] = [];
+                    captureBlock.push(`[DOCUMENT ${idx + 1}]`);
+                    captureBlock.push(`Source Type: ${capture.capture_type}`);
 
-                for (const capture of captures) {
+                    if (capture.page_title) {
+                        captureBlock.push(`Title: ${capture.page_title}`);
+                    }
+                    if (capture.source_url) {
+                        captureBlock.push(`Source URL: ${capture.source_url}`);
+                    }
+
                     if (capture.ai_markdown_summary) {
-                        contextParts.push(
-                            `[Capture Summary — ${capture.capture_type}]\n${capture.ai_markdown_summary}`
-                        );
+                        captureBlock.push(`[Summary]\n${capture.ai_markdown_summary}`);
                     }
                     if (capture.ide_code_diff) {
-                        contextParts.push(`[Code Diff]\n\`\`\`diff\n${capture.ide_code_diff}\n\`\`\``);
+                        captureBlock.push(`[Code Diff]\n\`\`\`diff\n${capture.ide_code_diff}\n\`\`\``);
                     }
                     if (
                         capture.sessions &&
                         Array.isArray(capture.sessions) &&
                         capture.sessions[0]?.active_file_context
                     ) {
-                        contextParts.push(
-                            `[Active File at Capture Time]\n${capture.sessions[0].active_file_context}`
-                        );
+                        captureBlock.push(`[Active File]\n${capture.sessions[0].active_file_context}`);
                     }
+
                     if (capture.capture_attachments && capture.capture_attachments.length > 0) {
                         const attachmentsList = capture.capture_attachments
-                            .map((att) => `- ${att.file_name} (${att.file_type}): ${att.s3_url}`)
+                            .map((att) => `- [${att.file_type}] ${att.file_name} (URL: ${att.s3_url})`)
                             .join("\n");
-                        contextParts.push(`[Attached Media for this capture]\n${attachmentsList}`);
+                        captureBlock.push(`[Attachments]\n${attachmentsList}`);
                     }
-                }
 
-                const contextText = contextParts.slice(0, 20).join("\n\n---\n\n"); // safety cap
+                    // Find all matched vector chunks for THIS specific capture
+                    const relatedChunks = chunks.filter((c) => c.capture_id === capture.id);
+                    if (relatedChunks.length > 0) {
+                        captureBlock.push(`Content:`);
+                        for (const chunk of relatedChunks) {
+                            captureBlock.push(`--- Fragment ---\n${chunk.chunk_text}`);
+                        }
+                    }
+
+                    contextParts.push(captureBlock.join("\n"));
+                });
+
+                const contextText = contextParts.slice(0, 15).join("\n\n-------------------\n\n"); // safety cap
 
                 // ----------------------------------------------------------------
                 // Step 6: Build Claude multimodal messages
