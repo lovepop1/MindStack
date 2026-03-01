@@ -202,6 +202,12 @@ export async function POST(req: NextRequest) {
                             `[Active File at Capture Time]\n${capture.sessions[0].active_file_context}`
                         );
                     }
+                    if (capture.capture_attachments && capture.capture_attachments.length > 0) {
+                        const attachmentsList = capture.capture_attachments
+                            .map((att) => `- ${att.file_name} (${att.file_type}): ${att.s3_url}`)
+                            .join("\n");
+                        contextParts.push(`[Attached Media for this capture]\n${attachmentsList}`);
+                    }
                 }
 
                 const contextText = contextParts.slice(0, 20).join("\n\n---\n\n"); // safety cap
@@ -211,11 +217,12 @@ export async function POST(req: NextRequest) {
                 // ----------------------------------------------------------------
                 const systemPrompt = `You are MindStack, an AI assistant with deep knowledge of a developer's learning history.
 Answer questions accurately using the provided context. Reference specific captures, diffs, or file names when relevant.
-Format your response in clear Markdown.
 
-**CRITICAL INSTRUCTION FOR VISUALS:**
-If the user asks about an image, UI, diagram, or specific visual content, or if you are explaining a concept that has an associated image in your context, you MUST embed the image inline in your markdown response using standard markdown syntax: \`![Alt Text](url)\`.
-Use the exact S3 URLs provided to you in the retrieved context blocks. Do not invent URLs.`;
+Formatting Rules:
+
+Always use markdown.
+When writing code, use fenced code blocks with the correct language (e.g., \`\`\`python).
+If a user asks about an image, diagram, or video frame, look in the retrieved context for its URL. You must embed the image directly in your response using markdown syntax: ![Image Description](https://your-s3-bucket-url.com/image.png).`;
 
                 // Reconstruct message history from the request
                 const historyMessages: ClaudeMessage[] = incomingMessages.slice(-10).map((m) => ({
