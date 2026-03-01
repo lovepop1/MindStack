@@ -13,12 +13,16 @@
     "@aws-sdk/client-bedrock-runtime": "^3.743.0",
     "@aws-sdk/client-s3": "^3.743.0",
     "@aws-sdk/s3-request-presigner": "^3.743.0",
+    "@playzone/youtube-transcript": "^1.0.0",
     "@supabase/supabase-js": "^2.49.1",
     "next": "^14.2.29",
     "pdf-parse": "^1.1.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "youtube-transcript": "^1.2.1"
+    "youtube-caption-extractor": "^1.9.1",
+    "youtube-transcript": "^1.2.1",
+    "youtube-transcript-api": "^3.0.6",
+    "youtubei.js": "^16.0.1"
   },
   "devDependencies": {
     "@types/node": "^20.17.17",

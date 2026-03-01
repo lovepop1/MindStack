@@ -158,21 +158,34 @@ async function processBrowserCaptureAsync(args: {
     // -- Step 1: Fetch YouTube transcript for VIDEO_SEGMENT -------------------
     if (args.capture_type === "VIDEO_SEGMENT" && args.source_url) {
         try {
-            // Dynamic import so the module doesn't break builds if optional dep missing
-            const { YoutubeTranscript } = await import("youtube-transcript");
-
-            // Extract video ID from URL
             const videoId = extractYoutubeVideoId(args.source_url);
             if (videoId) {
-                const transcript = await YoutubeTranscript.fetchTranscript(videoId);
+                const { exec } = await import("child_process");
+                const util = await import("util");
+                const execPromise = util.promisify(exec);
+
+                // Call the python youtube_transcript_api robust CLI via WSL
+                const { stdout } = await execPromise(
+                    `wsl ~/.local/bin/youtube_transcript_api ${videoId} --format json`
+                );
+
+                const parsedResponse = JSON.parse(stdout) as {
+                    text: string;
+                    start: number;
+                    duration: number;
+                }[][];
+
+                // The CLI returns an array of arrays for JSON format
+                const transcript = parsedResponse.length > 0 ? parsedResponse[0] : [];
+
                 // Filter to the requested time range if provided
                 const relevantSegments = transcript.filter((seg) => {
                     if (
                         args.video_start_time !== undefined &&
                         args.video_end_time !== undefined
                     ) {
-                        const segStart = seg.offset / 1000; // offset is in ms
-                        const segEnd = segStart + seg.duration / 1000;
+                        const segStart = seg.start; // already in seconds
+                        const segEnd = segStart + seg.duration;
                         return segStart >= args.video_start_time && segEnd <= args.video_end_time + 5;
                     }
                     return true;

@@ -27,3 +27,6 @@ Thumbs.db
 
 # Misc
 *.pem
+# Python VENV
+python-service/venv/
+python-service/__pycache__/
