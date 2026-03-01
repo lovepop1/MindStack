@@ -115,6 +115,7 @@ export async function POST(req: NextRequest) {
                     session_id: string;
                     capture_type: string;
                     page_title: string | null;
+                    text_content: string | null;
                     ai_markdown_summary: string | null;
                     ide_code_diff: string | null;
                     ide_error_log: string | null;
@@ -132,7 +133,7 @@ export async function POST(req: NextRequest) {
                     const { data, error: captureErr } = await supabase
                         .from("captures")
                         .select(
-                            `id, session_id, capture_type, page_title, ai_markdown_summary,
+                            `id, session_id, capture_type, page_title, text_content, ai_markdown_summary,
                ide_code_diff, ide_error_log, source_url,
                sessions ( active_file_context ),
                capture_attachments ( s3_url, file_type, file_name )`
@@ -211,6 +212,9 @@ export async function POST(req: NextRequest) {
                         captureBlock.push(`Source URL: ${capture.source_url}`);
                     }
 
+                    if (capture.text_content) {
+                        captureBlock.push(`[Text Content]\n${capture.text_content}`);
+                    }
                     if (capture.ai_markdown_summary) {
                         captureBlock.push(`[Summary]\n${capture.ai_markdown_summary}`);
                     }
