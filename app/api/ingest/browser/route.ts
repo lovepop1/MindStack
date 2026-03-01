@@ -166,8 +166,8 @@ async function processBrowserCaptureAsync(args: {
         try {
             const videoId = extractYoutubeVideoId(args.source_url);
             if (videoId) {
-                // Fetch from the Vercel Python Serverless Function
-                const baseUrl = args.requestOrigin || "http://localhost:3000";
+                // Fetch from the Standalone Python Microservice
+                const baseUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
                 const url = `${baseUrl}/api/transcript?v=${videoId}`;
 
                 try {
