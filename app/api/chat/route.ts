@@ -225,14 +225,23 @@ Format your response in clear Markdown.`;
                         text: `## Retrieved Context\n\n${contextText}\n\n---\n\n## Question\n${current_query}`,
                     });
                 } else {
-                    // No captures ingested yet — tell Claude explicitly so it doesn't hallucinate
+                    // No captures ingested yet — force Claude to return the exact empty state
+                    // markdown that the frontend expects.
                     userContent.push({
                         type: "text",
                         text: `No captures have been ingested into MindStack yet for this project. 
                         
-Please inform the user that there is no activity data available yet, and guide them to start capturing data using the MindStack browser extension or IDE plugin.
+You MUST reply with exactly this markdown text, word for word, and NOTHING else:
 
-User's question was: ${current_query}`,
+🧠
+### No Progress Data Available
+I don't have any captured activity or progress data available for your project yet. To start tracking your development journey, you'll need to:
+* Install the MindStack browser extension or IDE plugin
+* Begin capturing your coding sessions, web research, and other development activities
+
+Once you start capturing data, I'll be able to provide insights about your progress, summarize what you've learned, and help you navigate your development history.
+
+Would you like information on how to set up MindStack to start tracking your progress?`,
                     });
                 }
 
