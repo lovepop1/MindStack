@@ -117,6 +117,10 @@ export async function POST(req: NextRequest) {
         // -- Respond immediately -----------------------------------------------
         const response = NextResponse.json({ capture_id }, { status: 200 });
 
+        const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "localhost:3000";
+        const proto = req.headers.get("x-forwarded-proto") || "http";
+        const requestOrigin = `${proto}://${host}`;
+
         // -- Async: Embed pipeline (fire-and-forget) ----------------------------
         processBrowserCaptureAsync({
             capture_id,
@@ -127,6 +131,7 @@ export async function POST(req: NextRequest) {
             video_start_time,
             video_end_time,
             attachments,
+            requestOrigin,
         }).catch((err) =>
             console.error(`[ingest/browser] Async pipeline failed for ${capture_id}:`, err)
         );
@@ -151,6 +156,7 @@ async function processBrowserCaptureAsync(args: {
     video_start_time?: number;
     video_end_time?: number;
     attachments?: { file_type: string; file_name: string }[];
+    requestOrigin?: string;
 }): Promise<void> {
     const admin = createAdminClient();
     let fullText = args.text_content;
@@ -160,41 +166,25 @@ async function processBrowserCaptureAsync(args: {
         try {
             const videoId = extractYoutubeVideoId(args.source_url);
             if (videoId) {
-                const { exec } = await import("child_process");
-                const util = await import("util");
-                const execPromise = util.promisify(exec);
+                // Fetch from the Vercel Python Serverless Function
+                const baseUrl = args.requestOrigin || "http://localhost:3000";
+                const url = `${baseUrl}/api/transcript?v=${videoId}`;
 
-                // Call the python youtube_transcript_api robust CLI via WSL
-                const { stdout } = await execPromise(
-                    `wsl ~/.local/bin/youtube_transcript_api ${videoId} --format json`
-                );
+                try {
+                    const response = await fetch(url);
+                    const data = await response.json();
 
-                const parsedResponse = JSON.parse(stdout) as {
-                    text: string;
-                    start: number;
-                    duration: number;
-                }[][];
-
-                // The CLI returns an array of arrays for JSON format
-                const transcript = parsedResponse.length > 0 ? parsedResponse[0] : [];
-
-                // Filter to the requested time range if provided
-                const relevantSegments = transcript.filter((seg) => {
-                    if (
-                        args.video_start_time !== undefined &&
-                        args.video_end_time !== undefined
-                    ) {
-                        const segStart = seg.start; // already in seconds
-                        const segEnd = segStart + seg.duration;
-                        return segStart >= args.video_start_time && segEnd <= args.video_end_time + 5;
+                    if (data.transcript) {
+                        const transcriptText = data.transcript;
+                        fullText = fullText
+                            ? `${fullText}\n\n[Transcript]\n${transcriptText}`
+                            : transcriptText;
+                    } else if (data.error) {
+                        console.warn(`[ingest/browser] Vercel Python API returned error:`, data.error);
                     }
-                    return true;
-                });
-
-                const transcriptText = relevantSegments.map((s) => s.text).join(" ");
-                fullText = fullText
-                    ? `${fullText}\n\n[Transcript]\n${transcriptText}`
-                    : transcriptText;
+                } catch (fetchErr) {
+                    console.error(`[ingest/browser] Error calling Vercel transcript API:`, fetchErr);
+                }
             }
         } catch (transcriptErr) {
             // Graceful fallback — transcripts may be disabled
