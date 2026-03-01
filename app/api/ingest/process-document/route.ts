@@ -18,14 +18,15 @@ export async function POST(req: NextRequest) {
         extractJwt(req);
 
         const body = await req.json();
-        const { capture_id, s3_url } = body as {
+        const { capture_id, project_id, s3_url } = body as {
             capture_id?: string;
+            project_id?: string;
             s3_url?: string;
         };
 
-        if (!capture_id || !s3_url) {
+        if (!capture_id || !project_id || !s3_url) {
             return NextResponse.json(
-                { error: "`capture_id` and `s3_url` are required" },
+                { error: "`capture_id`, `project_id`, and `s3_url` are required" },
                 { status: 400 }
             );
         }
@@ -33,7 +34,7 @@ export async function POST(req: NextRequest) {
         // Respond immediately and process asynchronously
         const response = NextResponse.json({ success: true, capture_id });
 
-        processDocumentAsync(capture_id, s3_url).catch((err) =>
+        processDocumentAsync(capture_id, project_id, s3_url).catch((err) =>
             console.error(`[ingest/process-document] Async failed for ${capture_id}:`, err)
         );
 
@@ -50,6 +51,7 @@ export async function POST(req: NextRequest) {
 // ---------------------------------------------------------------------------
 async function processDocumentAsync(
     capture_id: string,
+    project_id: string,
     s3_url: string
 ): Promise<void> {
     const admin = createAdminClient();
@@ -118,6 +120,7 @@ async function processDocumentAsync(
 
     const chunkRows: {
         capture_id: string;
+        project_id: string;
         chunk_text: string;
         embedding: number[];
         chunk_index: number;
@@ -128,6 +131,7 @@ async function processDocumentAsync(
             const embedding = await invokeTitanEmbedding(chunks[i]);
             chunkRows.push({
                 capture_id,
+                project_id,
                 chunk_text: chunks[i],
                 embedding,
                 chunk_index: i,

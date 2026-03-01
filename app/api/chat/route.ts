@@ -146,23 +146,26 @@ export async function POST(req: NextRequest) {
                 }
 
                 // ----------------------------------------------------------------
-                // Step 4: Collect S3 URLs and identify images for Base64 injection
+                // Step 4: Collect S3 URLs and identify images/pdfs for Base64 injection
                 // ----------------------------------------------------------------
                 const allS3Urls: string[] = [];
-                const imagePayloads: { base64: string; mimeType: string }[] = [];
+                const mediaPayloads: { base64: string; mimeType: string; isPdf: boolean }[] = [];
 
                 for (const capture of captures) {
                     for (const att of capture.capture_attachments) {
                         allS3Urls.push(att.s3_url);
 
-                        if (att.file_type === "IMAGE") {
+                        if (att.file_type === "IMAGE" || att.file_type === "PDF") {
                             try {
-                                const imgData = await fetchImageAsBase64(att.s3_url);
-                                imagePayloads.push(imgData);
-                            } catch (imgErr) {
+                                const mediaData = await fetchImageAsBase64(att.s3_url);
+                                mediaPayloads.push({
+                                    ...mediaData,
+                                    isPdf: att.file_type === "PDF",
+                                });
+                            } catch (mediaErr) {
                                 console.warn(
-                                    `[chat] Image fetch failed for ${att.s3_url}:`,
-                                    imgErr
+                                    `[chat] Media fetch failed for ${att.s3_url}:`,
+                                    mediaErr
                                 );
                             }
                         }
@@ -208,7 +211,11 @@ export async function POST(req: NextRequest) {
                 // ----------------------------------------------------------------
                 const systemPrompt = `You are MindStack, an AI assistant with deep knowledge of a developer's learning history.
 Answer questions accurately using the provided context. Reference specific captures, diffs, or file names when relevant.
-Format your response in clear Markdown.`;
+Format your response in clear Markdown.
+
+**CRITICAL INSTRUCTION FOR VISUALS:**
+If the user asks about an image, UI, diagram, or specific visual content, or if you are explaining a concept that has an associated image in your context, you MUST embed the image inline in your markdown response using standard markdown syntax: \`![Alt Text](url)\`.
+Use the exact S3 URLs provided to you in the retrieved context blocks. Do not invent URLs.`;
 
                 // Reconstruct message history from the request
                 const historyMessages: ClaudeMessage[] = incomingMessages.slice(-10).map((m) => ({
@@ -245,16 +252,27 @@ Would you like information on how to set up MindStack to start tracking your pro
                     });
                 }
 
-                // Inject Base64 images (up to 3 to manage token budget)
-                for (const img of imagePayloads.slice(0, 3)) {
-                    userContent.push({
-                        type: "image",
-                        source: {
-                            type: "base64",
-                            media_type: img.mimeType,
-                            data: img.base64,
-                        },
-                    });
+                // Inject Base64 media (up to 10 to manage token budget but allow for rich context)
+                for (const media of mediaPayloads.slice(0, 10)) {
+                    if (media.isPdf) {
+                        userContent.push({
+                            type: "document",
+                            source: {
+                                type: "base64",
+                                media_type: "application/pdf",
+                                data: media.base64,
+                            },
+                        });
+                    } else {
+                        userContent.push({
+                            type: "image",
+                            source: {
+                                type: "base64",
+                                media_type: media.mimeType,
+                                data: media.base64,
+                            },
+                        });
+                    }
                 }
 
                 const claudeMessages: ClaudeMessage[] = [

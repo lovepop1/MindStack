@@ -86,6 +86,14 @@ export type ClaudeContentBlock =
             media_type: string;
             data: string;
         };
+    }
+    | {
+        type: "document";
+        source: {
+            type: "base64";
+            media_type: string;
+            data: string;
+        };
     };
 
 export interface ClaudeMessage {
