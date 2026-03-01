@@ -56,12 +56,20 @@ export async function POST(req: NextRequest) {
         }
 
         // -- Sync: Insert capture ------------------------------------------------
+        // Build a text_content preview from available IDE fields so the card is
+        // immediately populated — the async pipeline will later add ai_markdown_summary.
+        const textParts: string[] = [];
+        if (ide_error_log) textParts.push(`## Error Log\n${ide_error_log}`);
+        if (ide_code_diff) textParts.push(`## Code Diff\n${ide_code_diff}`);
+        const initialTextContent = textParts.join("\n\n") || null;
+
         const { data: captureRow, error: captureError } = await supabase
             .from("captures")
             .insert({
                 session_id,
                 project_id,
                 capture_type,
+                text_content: initialTextContent,
                 ide_error_log: ide_error_log ?? null,
                 ide_code_diff: ide_code_diff ?? null,
                 ide_file_path: ide_file_path ?? null,

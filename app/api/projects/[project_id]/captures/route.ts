@@ -35,6 +35,7 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
         priority,
         source_url,
         page_title,
+        text_content,
         video_start_time,
         video_end_time,
         ide_error_log,

@@ -81,6 +81,7 @@ export async function POST(req: NextRequest) {
                 capture_type,
                 source_url: source_url ?? null,
                 page_title: page_title ?? null,
+                text_content: text_content ?? null,
                 video_start_time: video_start_time ?? null,
                 video_end_time: video_end_time ?? null,
                 priority: priority ?? 0,
@@ -190,6 +191,18 @@ async function processBrowserCaptureAsync(args: {
     if (!fullText || fullText.trim().length === 0) {
         console.log(`[ingest/browser] No text content for capture ${args.capture_id}, skipping embed`);
         return;
+    }
+
+    // -- Update text_content with the final merged text (may include transcript)
+    // This runs after the transcript has been appended so the card shows full content.
+    try {
+        await admin
+            .from("captures")
+            .update({ text_content: fullText })
+            .eq("id", args.capture_id);
+    } catch (updateErr) {
+        console.warn(`[ingest/browser] text_content update failed for ${args.capture_id}:`, updateErr);
+        // Non-fatal — the initial text_content from the insert is still available
     }
 
     // -- Step 2: Haiku summary ------------------------------------------------
