@@ -122,7 +122,7 @@ export async function* streamClaudeSonnet(
     try {
         const response = await bedrock.send(
             new InvokeModelWithResponseStreamCommand({
-                modelId: "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                modelId: "us.anthropic.claude-sonnet-4-6",
                 contentType: "application/json",
                 accept: "application/json",
                 body: JSON.stringify(body),
