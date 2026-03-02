@@ -24,17 +24,22 @@ def get_transcript(v: str = None):
         return JSONResponse(status_code=400, content={"error": "Missing video ID"})
         
     try:
-        transcript_list = YouTubeTranscriptApi.list_transcripts(v)
+        ytt_api = YouTubeTranscriptApi()
+        transcript_list = ytt_api.list(v)
         
         try:
-            # First try to find manual transcripts in relevant languages
-            transcript = transcript_list.find_transcript(['en', 'en-US', 'en-GB', 'hi'])
+            # First try to find manual transcripts
+            transcript = transcript_list.find_manually_created_transcript(['en', 'en-US', 'en-GB', 'hi'])
         except Exception:
-            # If no manual english/hindi, fallback to whatever is available (usually auto-generated)
-            transcript = next(iter(transcript_list))
+            # Fallback to generated
+            try:
+                transcript = transcript_list.find_generated_transcript(['en', 'en-US', 'en-GB', 'hi'])
+            except Exception:
+                # Absolute fallback
+                transcript = next(iter(transcript_list))
             
         data = transcript.fetch()
-        full_text = " ".join([segment["text"] for segment in data])
+        full_text = " ".join([segment.text for segment in data])
         return {"transcript": full_text}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
