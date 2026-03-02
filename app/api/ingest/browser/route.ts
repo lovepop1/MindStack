@@ -163,40 +163,46 @@ async function processBrowserCaptureAsync(args: {
 
     // -- Step 1: Fetch YouTube transcript for VIDEO_SEGMENT -------------------
     if (args.capture_type === "VIDEO_SEGMENT" && args.source_url) {
-        try {
-            const videoId = extractYoutubeVideoId(args.source_url);
-            if (videoId) {
-                // Fetch from the Standalone Python Microservice
-                const baseUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
-                let url = `${baseUrl}/api/transcript?v=${videoId}`;
+        if (fullText && fullText.trim().length > 0) {
+            // Browser extension already extracted a sliced transcript from the DOM!
+            console.log(`[ingest/browser] Using client-provided transcript for ${args.source_url}`);
+        } else {
+            // No captions provided by browser — fall back to Python scraper
+            try {
+                const videoId = extractYoutubeVideoId(args.source_url);
+                if (videoId) {
+                    // Fetch from the Standalone Python Microservice
+                    const baseUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
+                    let url = `${baseUrl}/api/transcript?v=${videoId}`;
 
-                // Pass precise timestamps to the microservice so it can slice the transcript for exact context.
-                if (args.video_start_time !== undefined && args.video_end_time !== undefined) {
-                    url += `&start=${args.video_start_time}&end=${args.video_end_time}`;
-                }
-
-                try {
-                    const response = await fetch(url);
-                    const data = await response.json();
-
-                    if (data.transcript) {
-                        const transcriptText = data.transcript;
-                        fullText = fullText
-                            ? `${fullText}\n\n[Transcript]\n${transcriptText}`
-                            : transcriptText;
-                    } else if (data.error) {
-                        console.warn(`[ingest/browser] Vercel Python API returned error:`, data.error);
+                    // Pass precise timestamps to the microservice so it can slice the transcript for exact context.
+                    if (args.video_start_time !== undefined && args.video_end_time !== undefined) {
+                        url += `&start=${args.video_start_time}&end=${args.video_end_time}`;
                     }
-                } catch (fetchErr) {
-                    console.error(`[ingest/browser] Error calling Vercel transcript API:`, fetchErr);
+
+                    try {
+                        const response = await fetch(url);
+                        const data = await response.json();
+
+                        if (data.transcript) {
+                            const transcriptText = data.transcript;
+                            fullText = fullText
+                                ? `${fullText}\n\n[Transcript]\n${transcriptText}`
+                                : transcriptText;
+                        } else if (data.error) {
+                            console.warn(`[ingest/browser] Vercel Python API returned error:`, data.error);
+                        }
+                    } catch (fetchErr) {
+                        console.error(`[ingest/browser] Error calling Vercel transcript API:`, fetchErr);
+                    }
                 }
+            } catch (transcriptErr) {
+                // Graceful fallback — transcripts may be disabled
+                console.warn(
+                    `[ingest/browser] YouTube transcript fetch failed for ${args.source_url}:`,
+                    transcriptErr
+                );
             }
-        } catch (transcriptErr) {
-            // Graceful fallback — transcripts may be disabled
-            console.warn(
-                `[ingest/browser] YouTube transcript fetch failed for ${args.source_url}:`,
-                transcriptErr
-            );
         }
     }
 
