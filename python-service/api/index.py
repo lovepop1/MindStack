@@ -24,8 +24,34 @@ def get_transcript(v: str = None, start: float = None, end: float = None):
         return JSONResponse(status_code=400, content={"error": "Missing video ID"})
         
     try:
+        # Some versions/environments of youtube-transcript-api use different base methods
+        full_text = ""
+        
+        try:
+            # Try newer functional approach if available (common in pip 3.11+)
+            from youtube_transcript_api import YouTubeTranscriptApi as yta
+            if hasattr(yta, 'get_transcript'):
+                data = yta.get_transcript(v, languages=['en', 'en-US', 'en-GB', 'hi'])
+                filtered_segments = [s['text'] for s in data]
+                if start is not None and end is not None:
+                    buffered_start = max(0, start - 15)
+                    buffered_end = end + 15
+                    filtered_segments = [s['text'] for s in data if (s['start'] + s['duration']) >= buffered_start and s['start'] <= buffered_end]
+                    if not filtered_segments:
+                        filtered_segments = [s['text'] for s in data]
+                return {"transcript": " ".join(filtered_segments)}
+        except Exception as dynamic_err:
+            pass # Fallback to Object-Oriented extraction
+            
+        # Object-Oriented extraction for versions like 0.6.x - 1.2.x
         ytt_api = YouTubeTranscriptApi()
-        transcript_list = ytt_api.list(v)
+        
+        if hasattr(ytt_api, 'list'):
+            transcript_list = ytt_api.list(v)
+        elif hasattr(ytt_api, 'list_transcripts'):
+            transcript_list = ytt_api.list_transcripts(v)
+        else:
+             return JSONResponse(status_code=500, content={"error": "Vercel environment installed an incompatible youtube-transcript-api version. Neither list() nor get_transcript() found."})
         
         try:
             # First try to find manual transcripts

@@ -30,5 +30,6 @@ Thumbs.db
 # Python VENV
 python-service/venv/
 python-service/__pycache__/
+python-service/wsl_env/
 
 tmp_*

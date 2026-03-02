@@ -179,7 +179,7 @@ async function processBrowserCaptureAsync(args: {
                 const videoId = extractYoutubeVideoId(args.source_url);
                 if (videoId) {
                     // Fetch from the Standalone Python Microservice
-                    const baseUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
+                    const baseUrl = process.env.PYTHON_API_URL || "http://127.0.0.1:8000";
                     let url = `${baseUrl}/api/transcript?v=${videoId}`;
 
                     // Pass precise timestamps to the microservice so it can slice the transcript for exact context.
