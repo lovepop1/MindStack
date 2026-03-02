@@ -39,7 +39,7 @@ Automatically ingests web articles, YouTube video segments, and general web cont
 ### 2. IDE Plugin (`POST /api/ingest/ide`)
 Accepts strictly scoped payloads from a local code-editor extension:
 - `IDE_PROGRESS_SNAPSHOT`: Takes the exact code diff (`ide_code_diff`) and file tree (`repo_tree`), chunks them, translates the code changes to plain English via Haiku, and embeds both the code and the translation into Titan.
-- `IDE_TERMINAL_ERROR`: Ingests raw terminal failures (`ide_error_log`), processes the stack traces via Haiku into a "Key Learning" explanation, and indexes it so the developer can ask the chat engine about historical errors.
+- `IDE_BUG_FIX`: Ingests raw terminal failures (`ide_error_log`), processes the stack traces via Haiku into a "Key Learning" explanation, and indexes it so the developer can ask the chat engine about historical errors.
 
 ### 3. Document Processing (`POST /api/ingest/process-document`)
 For massive file inputs (e.g. PDFs). A client uploads the PDF securely to S3 via a presigned URL. The backend fetches the raw byte buffer from S3, parses the native text via `pdf-parse`, chunks the content aggressively, and creates embedded vectors tied strictly to an isolated `project_id`.

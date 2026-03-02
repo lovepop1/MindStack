@@ -6,7 +6,7 @@ import { chunkText } from "@/lib/chunker";
 // ---------------------------------------------------------------------------
 // Allowed IDE capture types
 // ---------------------------------------------------------------------------
-type IdeCaptureType = "IDE_TERMINAL_ERROR" | "IDE_PROGRESS_SNAPSHOT";
+type IdeCaptureType = "IDE_BUG_FIX" | "IDE_PROGRESS_SNAPSHOT";
 
 // ---------------------------------------------------------------------------
 // POST /api/ingest/ide
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        const validTypes: IdeCaptureType[] = ["IDE_TERMINAL_ERROR", "IDE_PROGRESS_SNAPSHOT"];
+        const validTypes: IdeCaptureType[] = ["IDE_BUG_FIX", "IDE_PROGRESS_SNAPSHOT"];
         if (!validTypes.includes(capture_type)) {
             return NextResponse.json({ error: `Invalid capture_type: ${capture_type}` }, { status: 400 });
         }
