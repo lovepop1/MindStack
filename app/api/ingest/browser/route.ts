@@ -168,7 +168,12 @@ async function processBrowserCaptureAsync(args: {
             if (videoId) {
                 // Fetch from the Standalone Python Microservice
                 const baseUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
-                const url = `${baseUrl}/api/transcript?v=${videoId}`;
+                let url = `${baseUrl}/api/transcript?v=${videoId}`;
+
+                // Pass precise timestamps to the microservice so it can slice the transcript for exact context.
+                if (args.video_start_time !== undefined && args.video_end_time !== undefined) {
+                    url += `&start=${args.video_start_time}&end=${args.video_end_time}`;
+                }
 
                 try {
                     const response = await fetch(url);

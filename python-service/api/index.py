@@ -19,7 +19,7 @@ def read_root():
     return {"status": "ok", "message": "MindStack Python Microservice is running"}
 
 @app.get("/api/transcript")
-def get_transcript(v: str = None):
+def get_transcript(v: str = None, start: float = None, end: float = None):
     if not v:
         return JSONResponse(status_code=400, content={"error": "Missing video ID"})
         
@@ -39,7 +39,24 @@ def get_transcript(v: str = None):
                 transcript = next(iter(transcript_list))
             
         data = transcript.fetch()
-        full_text = " ".join([segment.text for segment in data])
+        
+        # Slice transcript by start and end times if provided
+        if start is not None and end is not None:
+            # Add a 15-second buffer before and after for optimal context
+            buffered_start = max(0, start - 15)
+            buffered_end = end + 15
+            
+            filtered_segments = [
+                segment.text for segment in data
+                # Include segment if it overlaps with our buffered window
+                if (segment.start + segment.duration) >= buffered_start and segment.start <= buffered_end
+            ]
+            full_text = " ".join(filtered_segments)
+            if not full_text.strip():
+                full_text = " ".join([segment.text for segment in data]) # Fallback to full if slice is empty
+        else:
+            full_text = " ".join([segment.text for segment in data])
+            
         return {"transcript": full_text}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
