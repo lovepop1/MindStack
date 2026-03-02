@@ -35,6 +35,7 @@ export async function POST(req: NextRequest) {
             project_id,
             capture_type,
             text_content,
+            caption_text,
             source_url,
             page_title,
             video_start_time,
@@ -46,6 +47,7 @@ export async function POST(req: NextRequest) {
             project_id?: string;
             capture_type?: BrowserCaptureType;
             text_content?: string;
+            caption_text?: string;
             source_url?: string;
             page_title?: string;
             video_start_time?: number;
@@ -53,6 +55,8 @@ export async function POST(req: NextRequest) {
             priority?: number;
             attachments?: Attachment[];
         };
+
+        const final_text_content = text_content || caption_text || null;
 
         // -- Validate required fields -------------------------------------------
         if (!session_id || !project_id || !capture_type) {
@@ -81,7 +85,7 @@ export async function POST(req: NextRequest) {
                 capture_type,
                 source_url: source_url ?? null,
                 page_title: page_title ?? null,
-                text_content: text_content ?? null,
+                text_content: final_text_content,
                 video_start_time: video_start_time ?? null,
                 video_end_time: video_end_time ?? null,
                 priority: priority ?? 0,
@@ -126,7 +130,8 @@ export async function POST(req: NextRequest) {
             capture_id,
             project_id,
             capture_type,
-            text_content: text_content ?? "",
+            text_content: final_text_content ?? "",
+            caption_text,
             source_url: source_url ?? "",
             video_start_time,
             video_end_time,
@@ -152,6 +157,7 @@ async function processBrowserCaptureAsync(args: {
     project_id: string;
     capture_type: BrowserCaptureType;
     text_content: string;
+    caption_text?: string;
     source_url: string;
     video_start_time?: number;
     video_end_time?: number;
@@ -160,6 +166,7 @@ async function processBrowserCaptureAsync(args: {
 }): Promise<void> {
     const admin = createAdminClient();
     let fullText = args.text_content;
+    let transcriptTextForPrompt = args.caption_text || "";
 
     // -- Step 1: Fetch YouTube transcript for VIDEO_SEGMENT -------------------
     if (args.capture_type === "VIDEO_SEGMENT" && args.source_url) {
@@ -186,6 +193,7 @@ async function processBrowserCaptureAsync(args: {
 
                         if (data.transcript) {
                             const transcriptText = data.transcript;
+                            transcriptTextForPrompt = transcriptText;
                             fullText = fullText
                                 ? `${fullText}\n\n[Transcript]\n${transcriptText}`
                                 : transcriptText;
@@ -236,7 +244,12 @@ async function processBrowserCaptureAsync(args: {
     // -- Step 2: Haiku summary ------------------------------------------------
     let summary = "";
     try {
-        const summaryPrompt = `Summarize the following developer/learning content in clear markdown. Be concise but thorough. Include key concepts, facts, and any code-related insights.\n\n---\n\n${fullText.slice(0, 15000)}`;
+        let summaryPrompt = `Summarize the following developer/learning content in clear markdown. Be concise but thorough. Include key concepts, facts, and any code-related insights.\n\n---\n\n${fullText.slice(0, 15000)}`;
+
+        if (args.capture_type === "VIDEO_SEGMENT" && transcriptTextForPrompt && transcriptTextForPrompt.trim().length > 0) {
+            summaryPrompt += `\n\nThe user captured a video keyframe from ${args.video_start_time}s to ${args.video_end_time}s. The spoken transcript during this exact window is: "${transcriptTextForPrompt}". Please incorporate this spoken context into your summary of the visual frame.`;
+        }
+
         summary = await invokeClaudeHaiku(summaryPrompt);
 
         await admin
