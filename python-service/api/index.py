@@ -25,7 +25,14 @@ def get_transcript(v: str = None):
         
     try:
         transcript_list = YouTubeTranscriptApi.list_transcripts(v)
-        transcript = transcript_list.find_transcript(['en', 'en-US', 'en-GB', 'hi'])
+        
+        try:
+            # First try to find manual transcripts in relevant languages
+            transcript = transcript_list.find_transcript(['en', 'en-US', 'en-GB', 'hi'])
+        except Exception:
+            # If no manual english/hindi, fallback to whatever is available (usually auto-generated)
+            transcript = next(iter(transcript_list))
+            
         data = transcript.fetch()
         full_text = " ".join([segment["text"] for segment in data])
         return {"transcript": full_text}

@@ -30,3 +30,5 @@ Thumbs.db
 # Python VENV
 python-service/venv/
 python-service/__pycache__/
+
+tmp_*

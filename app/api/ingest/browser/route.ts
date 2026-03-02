@@ -121,8 +121,8 @@ export async function POST(req: NextRequest) {
         const proto = req.headers.get("x-forwarded-proto") || "http";
         const requestOrigin = `${proto}://${host}`;
 
-        // -- Async: Embed pipeline (fire-and-forget) ----------------------------
-        processBrowserCaptureAsync({
+        // -- Async: Embed pipeline (Wait for Vercel Serverless to finish) ------
+        await processBrowserCaptureAsync({
             capture_id,
             project_id,
             capture_type,
