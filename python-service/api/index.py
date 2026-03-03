@@ -66,6 +66,12 @@ def get_transcript(v: str = None, start: float = None, end: float = None):
             
         data = transcript.fetch()
         
+        # Universal attribute getter for dicts vs objects
+        def get_val(item, key):
+            if isinstance(item, dict):
+                return item.get(key)
+            return getattr(item, key, None)
+
         # Slice transcript by start and end times if provided
         if start is not None and end is not None:
             # Add a 15-second buffer before and after for optimal context
@@ -73,15 +79,15 @@ def get_transcript(v: str = None, start: float = None, end: float = None):
             buffered_end = end + 15
             
             filtered_segments = [
-                segment.text for segment in data
+                get_val(segment, 'text') for segment in data
                 # Include segment if it overlaps with our buffered window
-                if (segment.start + segment.duration) >= buffered_start and segment.start <= buffered_end
+                if (get_val(segment, 'start') + get_val(segment, 'duration')) >= buffered_start and get_val(segment, 'start') <= buffered_end
             ]
             full_text = " ".join(filtered_segments)
             if not full_text.strip():
-                full_text = " ".join([segment.text for segment in data]) # Fallback to full if slice is empty
+                full_text = " ".join([get_val(segment, 'text') for segment in data]) # Fallback to full if slice is empty
         else:
-            full_text = " ".join([segment.text for segment in data])
+            full_text = " ".join([get_val(segment, 'text') for segment in data])
             
         return {"transcript": full_text}
     except Exception as e:
