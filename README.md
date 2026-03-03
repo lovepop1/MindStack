@@ -4,6 +4,7 @@ MindStack is an advanced multi-surface AI ingestion engine and multimodal query 
 
 ---
 
+
 ## ⚡ Tech Stack
 
 - **Framework:** Next.js 14 (App Router), React 18
