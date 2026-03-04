@@ -3,6 +3,8 @@ import { createAuthClient, extractJwt } from "@/lib/supabase";
 
 // 1. MUST ADD THIS TO PREVENT AGGRESSIVE CACHING
 export const dynamic = 'force-dynamic';
+export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 
 export async function GET(req: NextRequest) {
     try {
