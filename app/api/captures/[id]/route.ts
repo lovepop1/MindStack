@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createAuthClient, extractJwt } from "@/lib/supabase";
+import { createAuthClient, createAdminClient, extractJwt } from "@/lib/supabase";
 import { deleteS3Object } from "@/lib/s3";
 
 interface RouteParams {
@@ -96,8 +96,13 @@ export async function DELETE(req: NextRequest, { params }: RouteParams) {
         });
         await Promise.allSettled(s3Deletions);
 
-        // Delete DB row
-        const { error: deleteError } = await supabase
+        // ==========================================
+        // HERE IS THE FIX: Using the Admin Client
+        // ==========================================
+        const adminSupabase = createAdminClient();
+
+        // Delete DB row using the admin client
+        const { error: deleteError } = await adminSupabase
             .from("captures")
             .delete()
             .eq("id", id);
