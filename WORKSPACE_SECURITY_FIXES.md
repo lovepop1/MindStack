@@ -1,11 +1,68 @@
 # Team Workspaces Security & Media Access Fixes
 
 ## Overview
-This document covers two critical missing pieces for Team Workspaces that were implemented to prevent broken functionality and security issues.
+This document covers three critical missing pieces for Team Workspaces that were implemented to prevent broken functionality and security issues.
 
 ---
 
-## 🔒 Fix 1: Workspace Media Access (S3 Presigned URLs)
+## 📋 Fix 1: Workspace Captures Listing (CRITICAL)
+
+### The Problem
+Without a workspace-specific captures endpoint, the frontend would have no way to fetch and display the timeline of captures for a workspace. This is the primary UI for viewing team contributions.
+
+### The Solution
+Created: `app/api/workspaces/[workspace_id]/captures/route.ts`
+
+**What it does:**
+- Fetches all captures for a workspace (ordered by created_at DESC)
+- Includes author attribution fields (`author_id`, `author_display_name`)
+- Automatically converts S3 URLs to presigned GET URLs (1-hour TTL)
+- Verifies user is a workspace member before returning data
+
+**Authorization:**
+- User must be a member of the workspace (any role)
+- Uses RLS policies to verify membership
+
+**Usage:**
+```bash
+GET /api/workspaces/[workspace_id]/captures
+Authorization: Bearer <jwt>
+```
+
+**Response:**
+```json
+{
+  "captures": [
+    {
+      "id": "uuid",
+      "workspace_id": "uuid",
+      "author_id": "uuid",
+      "author_display_name": "Sarah",
+      "capture_type": "WEB_TEXT",
+      "source_url": "https://example.com",
+      "text_content": "...",
+      "created_at": "timestamp",
+      "capture_attachments": [
+        {
+          "id": "uuid",
+          "s3_url": "https://presigned-get-url...",
+          "file_type": "image/png",
+          "file_name": "screenshot.png"
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Key Differences from Project Captures:**
+- Includes `author_id` and `author_display_name` for attribution
+- Uses `workspace_id` instead of `project_id`
+- Verifies workspace membership explicitly
+
+---
+
+## 🔒 Fix 2: Workspace Media Upload (S3 Presigned URLs)
 
 ### The Problem
 Without a workspace-specific presigned URL endpoint, images and PDFs uploaded to workspace captures would show as broken image icons. The existing `/api/projects/[project_id]/captures/presign` endpoint only works for personal projects.
@@ -38,7 +95,7 @@ Authorization: Bearer <jwt>
 
 ---
 
-## 🛡️ Fix 2: Capture Deletion Permissions
+## 🛡️ Fix 3: Capture Deletion Permissions
 
 ### The Problem
 In the original implementation, any user could delete any capture without permission checks. In a multiplayer workspace, this would allow Sarah to delete Adithya's captures, causing chaos.
@@ -91,7 +148,18 @@ if (!hasPermission) {
 
 ## Testing
 
-### Test Workspace Media Access
+### Test Workspace Captures Listing
+```bash
+# Should return all captures with presigned URLs if user is member
+curl -X GET "https://your-domain.com/api/workspaces/[workspace-uuid]/captures" \
+  -H "Authorization: Bearer YOUR_JWT"
+
+# Should fail with 404 if user is not a member
+curl -X GET "https://your-domain.com/api/workspaces/[workspace-uuid]/captures" \
+  -H "Authorization: Bearer NON_MEMBER_JWT"
+```
+
+### Test Workspace Media Upload
 ```bash
 # Should succeed if user is workspace member
 curl -X GET "https://your-domain.com/api/workspaces/[workspace-uuid]/captures/presign?filename=test.pdf&contentType=application/pdf" \
@@ -121,16 +189,22 @@ curl -X DELETE https://your-domain.com/api/captures/[capture-id] \
 
 ## Backward Compatibility
 
-Both fixes maintain full backward compatibility:
+All fixes maintain full backward compatibility:
 
-1. **Personal Projects:** The existing `/api/projects/[project_id]/captures/presign` endpoint continues to work for personal projects
-2. **Personal Captures:** Users can still delete their own captures in personal projects without workspace checks
+1. **Personal Projects:** The existing `/api/projects/[project_id]/captures` endpoint continues to work for personal projects
+2. **Personal Project Media:** The existing `/api/projects/[project_id]/captures/presign` endpoint continues to work
+3. **Personal Captures:** Users can still delete their own captures in personal projects without workspace checks
 
 ---
 
 ## Security Considerations
 
-### Workspace Media Access
+### Workspace Captures Listing
+- Uses existing RLS policies on `workspace_members` table
+- Presigned GET URLs expire after 1 hour
+- Fails gracefully with 404 if user is not a member
+
+### Workspace Media Upload
 - Uses existing RLS policies on `workspace_members` table
 - No additional database policies needed
 - Fails gracefully with 404 if user is not a member
@@ -144,15 +218,18 @@ Both fixes maintain full backward compatibility:
 
 ## Files Modified
 
-1. **Created:** `app/api/workspaces/[workspace_id]/captures/presign/route.ts`
-   - New endpoint for workspace media access
+1. **Created:** `app/api/workspaces/[workspace_id]/captures/route.ts`
+   - New endpoint for listing workspace captures with presigned URLs
 
-2. **Updated:** `app/api/captures/[id]/route.ts`
+2. **Created:** `app/api/workspaces/[workspace_id]/captures/presign/route.ts`
+   - New endpoint for workspace media upload
+
+3. **Updated:** `app/api/captures/[id]/route.ts`
    - Added permission checks for deletion
    - Checks author ownership and workspace admin role
 
-3. **Updated:** `DEPLOYMENT_CHECKLIST.md`
-   - Added testing steps for both fixes
+4. **Updated:** `DEPLOYMENT_CHECKLIST.md`
+   - Added testing steps for all three fixes
    - Updated success criteria
 
 ---
@@ -160,9 +237,10 @@ Both fixes maintain full backward compatibility:
 ## Next Steps
 
 1. Deploy the changes to your environment
-2. Run the test cases in `DEPLOYMENT_CHECKLIST.md` Step 7.1 and 7.2
-3. Verify images/PDFs display correctly in workspace captures
-4. Verify deletion permissions work as expected
+2. Run the test cases in `DEPLOYMENT_CHECKLIST.md` Step 7.1, 7.2, and 7.3
+3. Verify workspace captures timeline displays correctly
+4. Verify images/PDFs display correctly in workspace captures
+5. Verify deletion permissions work as expected
 
 ---
 

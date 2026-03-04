@@ -57,7 +57,8 @@ git push origin main
 - ✅ `POST /api/workspaces/create` - NEW
 - ✅ `POST /api/workspaces/join` - NEW
 - ✅ `GET /api/workspaces` - NEW
-- ✅ `GET /api/workspaces/[workspace_id]/captures/presign` - NEW (S3 presigned URLs for workspace media)
+- ✅ `GET /api/workspaces/[workspace_id]/captures` - NEW (list all workspace captures with presigned URLs)
+- ✅ `GET /api/workspaces/[workspace_id]/captures/presign` - NEW (S3 presigned URLs for uploading media)
 - ✅ `POST /api/sessions/start` - UPDATED (now accepts workspace_id)
 - ✅ `POST /api/ingest/browser` - UPDATED (workspace support)
 - ✅ `POST /api/ingest/ide` - UPDATED (workspace support)
@@ -272,7 +273,48 @@ curl -X POST https://your-domain.com/api/chat \
 
 ## ✅ Step 7: Test Edge Cases
 
-### 7.1 Test Workspace Media Access (S3 Presigned URLs)
+### 7.1 Test Workspace Captures Listing
+```bash
+curl -X GET "https://your-domain.com/api/workspaces/[workspace-uuid]/captures" \
+  -H "Authorization: Bearer YOUR_JWT"
+```
+
+**Expected response:**
+```json
+{
+  "captures": [
+    {
+      "id": "capture-uuid",
+      "workspace_id": "workspace-uuid",
+      "author_id": "user-uuid",
+      "author_display_name": "Sarah",
+      "capture_type": "WEB_TEXT",
+      "source_url": "https://example.com",
+      "text_content": "...",
+      "created_at": "timestamp",
+      "capture_attachments": [
+        {
+          "id": "attachment-uuid",
+          "s3_url": "https://presigned-get-url...",
+          "file_type": "image/png",
+          "file_name": "screenshot.png"
+        }
+      ]
+    }
+  ]
+}
+```
+
+**What this prevents:** Frontend unable to display workspace captures timeline.
+
+**Key differences from project captures:**
+- Includes `author_id` and `author_display_name` fields
+- Uses `workspace_id` instead of `project_id`
+- S3 URLs are automatically converted to presigned GET URLs (1-hour TTL)
+
+---
+
+### 7.2 Test Workspace Media Access (S3 Presigned URLs)
 ```bash
 curl -X GET "https://your-domain.com/api/workspaces/[workspace-uuid]/captures/presign?filename=test.pdf&contentType=application/pdf" \
   -H "Authorization: Bearer YOUR_JWT"
@@ -290,9 +332,9 @@ curl -X GET "https://your-domain.com/api/workspaces/[workspace-uuid]/captures/pr
 
 ---
 
-### 7.2 Test Capture Deletion Permissions
+### 7.3 Test Capture Deletion Permissions
 
-**Test 7.2a: User deletes their own capture**
+**Test 7.3a: User deletes their own capture**
 ```bash
 curl -X DELETE https://your-domain.com/api/captures/[capture-id] \
   -H "Authorization: Bearer CAPTURE_OWNER_JWT"
@@ -305,7 +347,7 @@ curl -X DELETE https://your-domain.com/api/captures/[capture-id] \
 }
 ```
 
-**Test 7.2b: Non-admin tries to delete another user's capture**
+**Test 7.3b: Non-admin tries to delete another user's capture**
 ```bash
 curl -X DELETE https://your-domain.com/api/captures/[capture-id] \
   -H "Authorization: Bearer NON_ADMIN_JWT"
@@ -318,7 +360,7 @@ curl -X DELETE https://your-domain.com/api/captures/[capture-id] \
 }
 ```
 
-**Test 7.2c: Admin deletes another user's capture**
+**Test 7.3c: Admin deletes another user's capture**
 ```bash
 curl -X DELETE https://your-domain.com/api/captures/[capture-id] \
   -H "Authorization: Bearer ADMIN_JWT"
@@ -335,7 +377,7 @@ curl -X DELETE https://your-domain.com/api/captures/[capture-id] \
 
 ---
 
-### 7.3 Session Without project_id or workspace_id
+### 7.4 Session Without project_id or workspace_id
 ```bash
 curl -X POST https://your-domain.com/api/sessions/start \
   -H "Authorization: Bearer YOUR_JWT" \
@@ -352,7 +394,7 @@ curl -X POST https://your-domain.com/api/sessions/start \
 
 ---
 
-### 7.4 Join Invalid Code
+### 7.5 Join Invalid Code
 ```bash
 curl -X POST https://your-domain.com/api/workspaces/join \
   -H "Authorization: Bearer YOUR_JWT" \
@@ -372,7 +414,7 @@ curl -X POST https://your-domain.com/api/workspaces/join \
 
 ---
 
-### 7.5 Duplicate Join
+### 7.6 Duplicate Join
 Try joining the same workspace twice with the same user.
 
 **Expected response:**
@@ -447,7 +489,9 @@ All of the following must be true:
 - [x] Chunks are prepended with contributor names
 - [x] Chat works with workspace_id
 - [x] Chat responses mention contributors
-- [x] Workspace media (images/PDFs) can be accessed via presigned URLs
+- [x] Workspace captures can be listed via GET endpoint
+- [x] Workspace media (images/PDFs) display correctly with presigned URLs
+- [x] Users can upload media to workspaces via presigned URLs
 - [x] Users can delete their own captures
 - [x] Admins can delete any capture in their workspace
 - [x] Non-admins cannot delete other users' captures
