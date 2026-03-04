@@ -8,7 +8,7 @@ interface RouteParams {
 
 // ---------------------------------------------------------------------------
 // DELETE /api/captures/[id]
-// 1. Verify user has permission (owns capture OR is workspace admin).
+// 1. Verify user has permission (owns capture OR is workspace admin OR is personal project).
 // 2. Fetch all capture_attachments to get S3 URLs.
 // 3. Delete each S3 object (best-effort; log failures but continue).
 // 4. Delete the DB row — cascades to capture_attachments and capture_chunks.
@@ -40,19 +40,31 @@ export async function DELETE(req: NextRequest, { params }: RouteParams) {
             return NextResponse.json({ error: "Capture not found" }, { status: 404 });
         }
 
-        // Check permissions: user owns the capture OR user is admin in the workspace
-        let hasPermission = capture.author_id === user.id;
+        let hasPermission = false;
 
-        if (!hasPermission && capture.workspace_id) {
-            // Check if user is an admin in the workspace
-            const { data: membership, error: membershipError } = await supabase
-                .from("workspace_members")
-                .select("role")
-                .eq("workspace_id", capture.workspace_id)
-                .eq("user_id", user.id)
-                .single();
+        // --- NEW PERMISSION LOGIC ---
+        if (capture.workspace_id) {
+            // SCENARIO A: It is a Team Workspace Capture
+            if (capture.author_id === user.id) {
+                hasPermission = true; // They are the author
+            } else {
+                // Check if user is an ADMIN in this workspace
+                const { data: membership } = await supabase
+                    .from("workspace_members")
+                    .select("role")
+                    .eq("workspace_id", capture.workspace_id)
+                    .eq("user_id", user.id)
+                    .single();
 
-            if (!membershipError && membership?.role === "ADMIN") {
+                if (membership?.role === "ADMIN") {
+                    hasPermission = true;
+                }
+            }
+        } else {
+            // SCENARIO B: It is a Personal Project Capture
+            // If the user's RLS allowed them to SELECT it above, they own the project.
+            // We allow deletion if author_id matches, OR if author_id is null (legacy captures).
+            if (capture.author_id === user.id || capture.author_id === null) {
                 hasPermission = true;
             }
         }
@@ -64,8 +76,7 @@ export async function DELETE(req: NextRequest, { params }: RouteParams) {
             );
         }
 
-        // Fetch attachments first (they will be cascade-deleted from DB, so we
-        // need the S3 URLs before the row disappears)
+        // Fetch attachments first (they will be cascade-deleted from DB)
         const { data: attachments, error: fetchError } = await supabase
             .from("capture_attachments")
             .select("s3_url")
@@ -75,7 +86,7 @@ export async function DELETE(req: NextRequest, { params }: RouteParams) {
             return NextResponse.json({ error: fetchError.message }, { status: 500 });
         }
 
-        // Best-effort S3 cleanup — don't abort if an object is already gone
+        // Best-effort S3 cleanup
         const s3Deletions = (attachments ?? []).map(async (att) => {
             try {
                 await deleteS3Object(att.s3_url);
@@ -85,7 +96,7 @@ export async function DELETE(req: NextRequest, { params }: RouteParams) {
         });
         await Promise.allSettled(s3Deletions);
 
-        // Delete DB row (cascade handles capture_attachments + capture_chunks)
+        // Delete DB row
         const { error: deleteError } = await supabase
             .from("captures")
             .delete()
