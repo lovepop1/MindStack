@@ -57,10 +57,12 @@ git push origin main
 - ✅ `POST /api/workspaces/create` - NEW
 - ✅ `POST /api/workspaces/join` - NEW
 - ✅ `GET /api/workspaces` - NEW
+- ✅ `GET /api/workspaces/[workspace_id]/captures/presign` - NEW (S3 presigned URLs for workspace media)
 - ✅ `POST /api/sessions/start` - UPDATED (now accepts workspace_id)
 - ✅ `POST /api/ingest/browser` - UPDATED (workspace support)
 - ✅ `POST /api/ingest/ide` - UPDATED (workspace support)
 - ✅ `POST /api/chat` - UPDATED (workspace RAG)
+- ✅ `DELETE /api/captures/[id]` - UPDATED (team role permissions)
 
 ---
 
@@ -270,7 +272,70 @@ curl -X POST https://your-domain.com/api/chat \
 
 ## ✅ Step 7: Test Edge Cases
 
-### 7.1 Session Without project_id or workspace_id
+### 7.1 Test Workspace Media Access (S3 Presigned URLs)
+```bash
+curl -X GET "https://your-domain.com/api/workspaces/[workspace-uuid]/captures/presign?filename=test.pdf&contentType=application/pdf" \
+  -H "Authorization: Bearer YOUR_JWT"
+```
+
+**Expected response:**
+```json
+{
+  "url": "https://s3-presigned-url...",
+  "key": "uploads/test.pdf"
+}
+```
+
+**What this prevents:** Broken image icons for PDFs and images in workspace captures.
+
+---
+
+### 7.2 Test Capture Deletion Permissions
+
+**Test 7.2a: User deletes their own capture**
+```bash
+curl -X DELETE https://your-domain.com/api/captures/[capture-id] \
+  -H "Authorization: Bearer CAPTURE_OWNER_JWT"
+```
+
+**Expected response:**
+```json
+{
+  "success": true
+}
+```
+
+**Test 7.2b: Non-admin tries to delete another user's capture**
+```bash
+curl -X DELETE https://your-domain.com/api/captures/[capture-id] \
+  -H "Authorization: Bearer NON_ADMIN_JWT"
+```
+
+**Expected response:**
+```json
+{
+  "error": "You don't have permission to delete this capture"
+}
+```
+
+**Test 7.2c: Admin deletes another user's capture**
+```bash
+curl -X DELETE https://your-domain.com/api/captures/[capture-id] \
+  -H "Authorization: Bearer ADMIN_JWT"
+```
+
+**Expected response:**
+```json
+{
+  "success": true
+}
+```
+
+**What this prevents:** Chaos in multiplayer environments where users delete each other's work.
+
+---
+
+### 7.3 Session Without project_id or workspace_id
 ```bash
 curl -X POST https://your-domain.com/api/sessions/start \
   -H "Authorization: Bearer YOUR_JWT" \
@@ -287,7 +352,7 @@ curl -X POST https://your-domain.com/api/sessions/start \
 
 ---
 
-### 7.2 Join Invalid Code
+### 7.4 Join Invalid Code
 ```bash
 curl -X POST https://your-domain.com/api/workspaces/join \
   -H "Authorization: Bearer YOUR_JWT" \
@@ -307,7 +372,7 @@ curl -X POST https://your-domain.com/api/workspaces/join \
 
 ---
 
-### 7.3 Duplicate Join
+### 7.5 Duplicate Join
 Try joining the same workspace twice with the same user.
 
 **Expected response:**
@@ -382,6 +447,10 @@ All of the following must be true:
 - [x] Chunks are prepended with contributor names
 - [x] Chat works with workspace_id
 - [x] Chat responses mention contributors
+- [x] Workspace media (images/PDFs) can be accessed via presigned URLs
+- [x] Users can delete their own captures
+- [x] Admins can delete any capture in their workspace
+- [x] Non-admins cannot delete other users' captures
 - [x] Personal projects still work (zero regressions)
 - [x] All TypeScript files compile without errors
 

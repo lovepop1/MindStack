@@ -8,9 +8,10 @@ interface RouteParams {
 
 // ---------------------------------------------------------------------------
 // DELETE /api/captures/[id]
-// 1. Fetch all capture_attachments to get S3 URLs.
-// 2. Delete each S3 object (best-effort; log failures but continue).
-// 3. Delete the DB row — cascades to capture_attachments and capture_chunks.
+// 1. Verify user has permission (owns capture OR is workspace admin).
+// 2. Fetch all capture_attachments to get S3 URLs.
+// 3. Delete each S3 object (best-effort; log failures but continue).
+// 4. Delete the DB row — cascades to capture_attachments and capture_chunks.
 // ---------------------------------------------------------------------------
 export async function DELETE(req: NextRequest, { params }: RouteParams) {
     try {
@@ -20,6 +21,47 @@ export async function DELETE(req: NextRequest, { params }: RouteParams) {
 
         if (!id) {
             return NextResponse.json({ error: "`id` is required" }, { status: 400 });
+        }
+
+        // Get current user ID
+        const { data: { user }, error: userError } = await supabase.auth.getUser();
+        if (userError || !user) {
+            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        }
+
+        // Fetch the capture to check ownership and workspace
+        const { data: capture, error: captureError } = await supabase
+            .from("captures")
+            .select("author_id, workspace_id")
+            .eq("id", id)
+            .single();
+
+        if (captureError || !capture) {
+            return NextResponse.json({ error: "Capture not found" }, { status: 404 });
+        }
+
+        // Check permissions: user owns the capture OR user is admin in the workspace
+        let hasPermission = capture.author_id === user.id;
+
+        if (!hasPermission && capture.workspace_id) {
+            // Check if user is an admin in the workspace
+            const { data: membership, error: membershipError } = await supabase
+                .from("workspace_members")
+                .select("role")
+                .eq("workspace_id", capture.workspace_id)
+                .eq("user_id", user.id)
+                .single();
+
+            if (!membershipError && membership?.role === "ADMIN") {
+                hasPermission = true;
+            }
+        }
+
+        if (!hasPermission) {
+            return NextResponse.json(
+                { error: "You don't have permission to delete this capture" },
+                { status: 403 }
+            );
         }
 
         // Fetch attachments first (they will be cascade-deleted from DB, so we
