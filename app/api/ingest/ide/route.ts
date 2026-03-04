@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAuthClient, createAdminClient, extractJwt } from "@/lib/supabase";
-import { invokeClaudeHaiku, invokeTitanEmbedding } from "@/lib/bedrock";
+import { invokeTitanEmbedding } from "@/lib/bedrock"; // Removed Haiku import
 import { chunkText } from "@/lib/chunker";
 
 // ---------------------------------------------------------------------------
@@ -13,8 +13,7 @@ type IdeCaptureType = "IDE_BUG_FIX" | "IDE_PROGRESS_SNAPSHOT";
 // Body: { session_id, project_id, capture_type, ide_error_log?, ide_code_diff?,
 //         repo_tree?, ide_file_path? }
 // Sync: Insert capture, return 200.
-// Async: Haiku translates the bug/diff into plain English.
-//        BOTH raw code and English translation are chunked + embedded.
+// Async: Chunk & embed the raw code/error directly with Titan.
 // ---------------------------------------------------------------------------
 export async function POST(req: NextRequest) {
     try {
@@ -97,7 +96,7 @@ export async function POST(req: NextRequest) {
 
         // -- Sync: Insert capture ------------------------------------------------
         // Build a text_content preview from available IDE fields so the card is
-        // immediately populated — the async pipeline will later add ai_markdown_summary.
+        // immediately populated.
         const textParts: string[] = [];
         if (ide_error_log) textParts.push(`## Error Log\n${ide_error_log}`);
         if (ide_code_diff) textParts.push(`## Code Diff\n${ide_code_diff}`);
@@ -113,6 +112,7 @@ export async function POST(req: NextRequest) {
                 author_display_name: author_display_name,
                 capture_type,
                 text_content: initialTextContent,
+                ai_markdown_summary: null, // Explicitly skip summary
                 ide_error_log: ide_error_log ?? null,
                 ide_code_diff: ide_code_diff ?? null,
                 ide_file_path: ide_file_path ?? null,
@@ -182,48 +182,14 @@ async function processIdeAsync(args: {
         return;
     }
 
-    // -- Step 1: Haiku translates raw code/error → plain English explanation --
-    let plainEnglishExplanation = "";
-    let summary = "";
-    try {
-        const translationPrompt = `You are a senior developer assistant. Below is raw IDE output from a developer's coding session.
-
-Convert this into two things, formatted in Markdown:
-1. **Plain-English Explanation**: What problem occurred and how it was (or is being) resolved.
-2. **Key Learning**: The underlying technical concept or pattern involved.
-
-Be concise but precise. Use code blocks for any code references.
-
----
-
-${rawContent.slice(0, 15000)}`;
-
-        plainEnglishExplanation = await invokeClaudeHaiku(translationPrompt);
-        summary = plainEnglishExplanation;
-
-        await admin
-            .from("captures")
-            .update({ ai_markdown_summary: summary })
-            .eq("id", args.capture_id);
-    } catch (haikuErr) {
-        console.error(`[ingest/ide] Haiku translation failed for ${args.capture_id}:`, haikuErr);
-    }
-
-    // -- Step 2: Chunk BOTH raw code AND English translation ------------------
+    // -- Step 1: Chunk the raw code directly (Skipping Haiku translation) -----
     // Skip IDE auto-generated files in the repo tree
     const rawChunks = chunkText(rawContent, {
         fileName: args.ide_file_path || undefined,
     });
 
-    const englishChunks = plainEnglishExplanation
-        ? chunkText(plainEnglishExplanation)
-        : [];
-
-    // Combine both sets, labeling them for retrieval context
-    const allTextChunks = [
-        ...rawChunks.map((c) => `[RAW]\n${c}`),
-        ...englishChunks.map((c) => `[EXPLANATION]\n${c}`),
-    ];
+    // Label them for retrieval context
+    const allTextChunks = rawChunks.map((c) => `[RAW]\n${c}`);
 
     if (allTextChunks.length === 0) return;
 
@@ -236,20 +202,21 @@ ${rawContent.slice(0, 15000)}`;
         chunk_index: number;
     }[] = [];
 
+    // -- Step 2: Embed + Save ------------------------------------------------
     for (let i = 0; i < allTextChunks.length; i++) {
         try {
             // CRITICAL: Prepend author attribution for workspace captures
-            let chunkText = allTextChunks[i];
+            let chunkTextData = allTextChunks[i];
             if (args.workspace_id && args.author_display_name) {
-                chunkText = `[Contributed by: ${args.author_display_name}]\n\n${allTextChunks[i]}`;
+                chunkTextData = `[Contributed by: ${args.author_display_name}]\n\n${allTextChunks[i]}`;
             }
 
-            const embedding = await invokeTitanEmbedding(chunkText);
+            const embedding = await invokeTitanEmbedding(chunkTextData);
             chunkRows.push({
                 capture_id: args.capture_id,
                 project_id: args.project_id,
                 workspace_id: args.workspace_id,
-                chunk_text: chunkText,
+                chunk_text: chunkTextData,
                 embedding,
                 chunk_index: i,
             });
@@ -267,7 +234,7 @@ ${rawContent.slice(0, 15000)}`;
             console.error(`[ingest/ide] Chunk insert failed for ${args.capture_id}:`, error);
         } else {
             console.log(
-                `[ingest/ide] Saved ${chunkRows.length} chunks (raw+explanation) for ${args.capture_id}`
+                `[ingest/ide] Saved ${chunkRows.length} chunks (raw code) for ${args.capture_id}`
             );
         }
     }

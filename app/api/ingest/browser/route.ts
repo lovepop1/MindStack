@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAuthClient, createAdminClient, extractJwt } from "@/lib/supabase";
-import { invokeClaudeHaiku, invokeTitanEmbedding } from "@/lib/bedrock";
+import { invokeTitanEmbedding } from "@/lib/bedrock"; // Removed Haiku import
 import { chunkText } from "@/lib/chunker";
 
 // ---------------------------------------------------------------------------
@@ -21,8 +21,8 @@ interface Attachment {
 // ---------------------------------------------------------------------------
 // POST /api/ingest/browser
 // Sync: Insert capture + attachments, return 200.
-// Async: Fetch YouTube transcript (VIDEO_SEGMENT), summarize via Haiku,
-//        chunk & embed with Titan, bulk-insert capture_chunks.
+// Async: Fetch YouTube transcript (VIDEO_SEGMENT),
+//        chunk & embed raw text with Titan, bulk-insert capture_chunks.
 // ---------------------------------------------------------------------------
 export async function POST(req: NextRequest) {
     try {
@@ -129,6 +129,7 @@ export async function POST(req: NextRequest) {
                 source_url: source_url ?? null,
                 page_title: page_title ?? null,
                 text_content: final_text_content,
+                ai_markdown_summary: null, // Explicitly null since we removed Haiku
                 video_start_time: video_start_time ?? null,
                 video_end_time: video_end_time ?? null,
                 priority: priority ?? 0,
@@ -282,7 +283,6 @@ async function processBrowserCaptureAsync(args: {
     }
 
     // -- Update text_content with the final merged text (may include transcript)
-    // This runs after the transcript has been appended so the card shows full content.
     try {
         await admin
             .from("captures")
@@ -293,28 +293,8 @@ async function processBrowserCaptureAsync(args: {
         // Non-fatal — the initial text_content from the insert is still available
     }
 
-    // -- Step 2: Haiku summary ------------------------------------------------
-    let summary = "";
-    try {
-        let summaryPrompt = `Summarize the following developer/learning content in clear markdown. Be concise but thorough. Include key concepts, facts, and any code-related insights.\n\n---\n\n${fullText.slice(0, 15000)}`;
-
-        if (args.capture_type === "VIDEO_SEGMENT" && transcriptTextForPrompt && transcriptTextForPrompt.trim().length > 0) {
-            summaryPrompt += `\n\nThe user captured a video keyframe from ${args.video_start_time}s to ${args.video_end_time}s. The spoken transcript during this exact window is: "${transcriptTextForPrompt}". Please incorporate this spoken context into your summary of the visual frame.`;
-        }
-
-        summary = await invokeClaudeHaiku(summaryPrompt);
-
-        await admin
-            .from("captures")
-            .update({ ai_markdown_summary: summary })
-            .eq("id", args.capture_id);
-    } catch (haikuErr) {
-        console.error(`[ingest/browser] Haiku summary failed for ${args.capture_id}:`, haikuErr);
-        // Continue — embed raw text even without a summary
-    }
-
-    // -- Step 3: Chunk + Embed + Save -----------------------------------------
-    const textToEmbed = summary || fullText;
+    // -- Step 2: Chunk + Embed + Save (Directly on fullText) ------------------
+    const textToEmbed = fullText;
     const chunks = chunkText(textToEmbed);
 
     if (chunks.length === 0) return;
@@ -331,17 +311,17 @@ async function processBrowserCaptureAsync(args: {
     for (let i = 0; i < chunks.length; i++) {
         try {
             // CRITICAL: Prepend author attribution for workspace captures
-            let chunkText = chunks[i];
+            let chunkTextData = chunks[i];
             if (args.workspace_id && args.author_display_name) {
-                chunkText = `[Contributed by: ${args.author_display_name}]\n\n${chunks[i]}`;
+                chunkTextData = `[Contributed by: ${args.author_display_name}]\n\n${chunks[i]}`;
             }
 
-            const embedding = await invokeTitanEmbedding(chunkText);
+            const embedding = await invokeTitanEmbedding(chunkTextData);
             chunkRows.push({
                 capture_id: args.capture_id,
                 project_id: args.project_id,
                 workspace_id: args.workspace_id,
-                chunk_text: chunkText,
+                chunk_text: chunkTextData,
                 embedding,
                 chunk_index: i,
             });
