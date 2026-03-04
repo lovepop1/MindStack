@@ -28,7 +28,7 @@ export async function invokeClaudeHaiku(prompt: string): Promise<string> {
     try {
         const response = await bedrock.send(
             new InvokeModelCommand({
-                modelId: "anthropic.claude-haiku-3-5",
+                modelId: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
                 contentType: "application/json",
                 accept: "application/json",
                 body,
