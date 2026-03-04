@@ -1,17 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAuthClient, extractJwt } from "@/lib/supabase";
 
-// ---------------------------------------------------------------------------
-// GET /api/workspaces
-// Returns all workspaces where the authenticated user is a member.
-// Includes workspace details and the user's role in each workspace.
-// ---------------------------------------------------------------------------
+// 1. MUST ADD THIS TO PREVENT AGGRESSIVE CACHING
+export const dynamic = 'force-dynamic';
+
 export async function GET(req: NextRequest) {
     try {
         const jwt = extractJwt(req);
         const supabase = createAuthClient(jwt);
 
-        // Resolve the user_id from the JWT
         const {
             data: { user },
             error: userError,
@@ -21,7 +18,6 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         }
 
-        // Fetch all workspace memberships for this user
         const { data: memberships, error: memberError } = await supabase
             .from("workspace_members")
             .select(
@@ -46,21 +42,20 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ error: memberError.message }, { status: 500 });
         }
 
-        // Transform the response to a cleaner structure
+        // 2. FIXED MAPPING TO MATCH FRONTEND INTERFACE EXACTLY
         const workspaces = (memberships ?? []).map((m) => {
             const workspace = Array.isArray(m.workspaces) ? m.workspaces[0] : m.workspaces;
             return {
-                workspace_id: m.workspace_id,
+                id: m.workspace_id,             // Fixed from workspace_id
                 name: workspace?.name,
                 join_code: workspace?.join_code,
-                created_by: workspace?.created_by,
+                role: m.role,                   // Fixed from user_role
+                display_name: m.display_name,   // Fixed from user_display_name
                 created_at: workspace?.created_at,
-                user_role: m.role,
-                user_display_name: m.display_name,
-                joined_at: m.joined_at,
             };
         });
 
+        // 3. We are returning an object { workspaces: [...] }
         return NextResponse.json({ workspaces });
     } catch (err) {
         if (err instanceof Response) return err;

@@ -318,10 +318,52 @@ curl -X POST https://your-domain.com/api/chat \
 
 ## 🚀 Deployment Notes
 
-1. **No Database Migrations Needed**: Schema already applied
-2. **Environment Variables**: No new variables required
-3. **Backward Compatible**: Deploy without downtime
-4. **Client Updates**: Browser/IDE extensions need updates to support `workspace_id`
+1. **Database Schema**: Tables already created
+2. **⚠️ CRITICAL: RLS Policies Required**: Run `supabase_rls_policies.sql` in Supabase SQL Editor
+3. **Environment Variables**: No new variables required
+4. **Backward Compatible**: Deploy without downtime
+5. **Client Updates**: Browser/IDE extensions need updates to support `workspace_id`
+
+### Required SQL Setup:
+Before the endpoints will work, you MUST apply Row-Level Security policies:
+
+```sql
+-- Clean up any existing policies first
+DROP POLICY IF EXISTS "Users can create workspaces" ON workspaces;
+DROP POLICY IF EXISTS "Users can read their workspaces" ON workspaces;
+DROP POLICY IF EXISTS "Users can join workspaces" ON workspace_members;
+DROP POLICY IF EXISTS "Users can read workspace members" ON workspace_members;
+DROP POLICY IF EXISTS "Users can read their own memberships" ON workspace_members;
+
+-- Enable RLS
+ALTER TABLE workspaces ENABLE ROW LEVEL SECURITY;
+ALTER TABLE workspace_members ENABLE ROW LEVEL SECURITY;
+
+-- WORKSPACE_MEMBERS policies (MUST come first to avoid recursion)
+CREATE POLICY "Users can join workspaces"
+ON workspace_members FOR INSERT TO authenticated
+WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY "Users can read their own memberships"
+ON workspace_members FOR SELECT TO authenticated
+USING (user_id = auth.uid());
+
+-- WORKSPACES policies (after workspace_members)
+CREATE POLICY "Users can create workspaces"
+ON workspaces FOR INSERT TO authenticated
+WITH CHECK (created_by = auth.uid());
+
+CREATE POLICY "Users can read their workspaces"
+ON workspaces FOR SELECT TO authenticated
+USING (EXISTS (
+    SELECT 1 FROM workspace_members wm
+    WHERE wm.workspace_id = workspaces.id AND wm.user_id = auth.uid()
+));
+```
+
+**CRITICAL:** The `workspace_members` SELECT policy must be non-recursive (check only `user_id = auth.uid()`) to avoid infinite recursion errors.
+
+See `supabase_rls_policies.sql` for complete policies including UPDATE and DELETE.
 
 ---
 
