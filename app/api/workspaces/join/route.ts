@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createAuthClient, extractJwt } from "@/lib/supabase";
+import { createAuthClient, createAdminClient, extractJwt } from "@/lib/supabase";
 
 // ---------------------------------------------------------------------------
 // POST /api/workspaces/join
@@ -11,6 +11,7 @@ export async function POST(req: NextRequest) {
     try {
         const jwt = extractJwt(req);
         const supabase = createAuthClient(jwt);
+        const adminSupabase = createAdminClient(); // <-- Added Admin Client
 
         // Resolve the user_id from the JWT
         const {
@@ -39,28 +40,30 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        // Look up the workspace by join code
-        const { data: workspace, error: workspaceError } = await supabase
+        // FIX 1: Look up the workspace by join code using the ADMIN client to bypass RLS.
+        // Using .maybeSingle() prevents the PGRST116 crash if the code is invalid.
+        const { data: workspace, error: workspaceError } = await adminSupabase
             .from("workspaces")
             .select("id")
             .eq("join_code", join_code.trim().toUpperCase())
-            .single();
+            .maybeSingle();
 
         if (workspaceError || !workspace) {
             console.error("[POST /api/workspaces/join] Workspace lookup error:", workspaceError);
             return NextResponse.json(
-                { error: "Invalid join code or workspace not found" },
+                { error: "Invalid join code. Please check and try again." },
                 { status: 404 }
             );
         }
 
-        // Check if the user is already a member
+        // FIX 2: Check if user is already a member using .maybeSingle() instead of .single()
+        // If they are not a member, this safely returns null instead of crashing.
         const { data: existingMember } = await supabase
             .from("workspace_members")
             .select("workspace_id")
             .eq("workspace_id", workspace.id)
             .eq("user_id", user.id)
-            .single();
+            .maybeSingle();
 
         if (existingMember) {
             return NextResponse.json(
@@ -69,7 +72,7 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        // Add the user as a MEMBER
+        // Add the user as a MEMBER using the regular auth client
         const { error: memberError } = await supabase
             .from("workspace_members")
             .insert({
