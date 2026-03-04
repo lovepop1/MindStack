@@ -3,15 +3,14 @@
 //
 // Strategy:
 //  - Split on double newlines (paragraphs) first for natural boundaries.
-//  - Accumulate paragraphs into chunks until MAX_WORDS is reached.
-//  - If a single paragraph exceeds MAX_WORDS, split it by sentence.
-//  - Auto-generated / lock files are detected by size + name pattern and
-//    returned as an empty array so they are never embedded.
+//  - Accumulate into chunks until MAX_WORDS or MAX_CHARS is reached.
+//  - If a single block is too big, split it by SINGLE newlines (lines of code).
+//  - If a single line is STILL too big, forcefully slice it by character limit.
 // ---------------------------------------------------------------------------
 
 const MAX_WORDS = 500;
+const MAX_CHARS = 20000; // ~5,000 tokens. Safely below AWS Titan's 8192 limit.
 
-// File patterns that are auto-generated and should never be embedded
 const IGNORE_PATTERNS = [
     /package-lock\.json$/i,
     /yarn\.lock$/i,
@@ -22,22 +21,16 @@ const IGNORE_PATTERNS = [
     /\.min\.css$/i,
 ];
 
-// If text exceeds this byte length AND matches an ignore pattern, skip it
 const IGNORE_SIZE_THRESHOLD = 50_000;
 
 export interface ChunkOptions {
-    /** Filename hint used to detect auto-generated files */
     fileName?: string;
-    /** Override words-per-chunk limit */
     maxWords?: number;
+    maxChars?: number;
 }
 
-/**
- * Split `text` into semantically coherent chunks of ~maxWords words each.
- * Returns an empty array if the text is identified as an auto-generated file.
- */
 export function chunkText(text: string, options: ChunkOptions = {}): string[] {
-    const { fileName, maxWords = MAX_WORDS } = options;
+    const { fileName, maxWords = MAX_WORDS, maxChars = MAX_CHARS } = options;
 
     if (!text || text.trim().length === 0) return [];
 
@@ -49,54 +42,72 @@ export function chunkText(text: string, options: ChunkOptions = {}): string[] {
         }
     }
 
-    const paragraphs = text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
-
+    // 1. Initial split by double newlines (paragraphs/code blocks)
+    const blocks = text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
     const chunks: string[] = [];
-    let current: string[] = [];
-    let wordCount = 0;
 
-    for (const paragraph of paragraphs) {
-        const paraWords = countWords(paragraph);
+    let currentChunkBuf: string[] = [];
+    let currentWordCount = 0;
+    let currentCharCount = 0;
 
-        if (paraWords > maxWords) {
-            // Flush whatever we have accumulated first
-            if (current.length > 0) {
-                chunks.push(current.join("\n\n"));
-                current = [];
-                wordCount = 0;
-            }
-            // Then split the oversized paragraph by sentence
-            const sentences = splitBySentence(paragraph);
-            let sentenceBuf: string[] = [];
-            let sentenceWordCount = 0;
-
-            for (const sentence of sentences) {
-                const sw = countWords(sentence);
-                if (sentenceWordCount + sw > maxWords && sentenceBuf.length > 0) {
-                    chunks.push(sentenceBuf.join(" "));
-                    sentenceBuf = [];
-                    sentenceWordCount = 0;
-                }
-                sentenceBuf.push(sentence);
-                sentenceWordCount += sw;
-            }
-            if (sentenceBuf.length > 0) {
-                chunks.push(sentenceBuf.join(" "));
-            }
-        } else if (wordCount + paraWords > maxWords) {
-            // Current chunk is full — flush and start a new one
-            chunks.push(current.join("\n\n"));
-            current = [paragraph];
-            wordCount = paraWords;
-        } else {
-            current.push(paragraph);
-            wordCount += paraWords;
+    function flush() {
+        if (currentChunkBuf.length > 0) {
+            chunks.push(currentChunkBuf.join("\n\n"));
+            currentChunkBuf = [];
+            currentWordCount = 0;
+            currentCharCount = 0;
         }
     }
 
-    if (current.length > 0) {
-        chunks.push(current.join("\n\n"));
+    for (const block of blocks) {
+        const blockWords = countWords(block);
+        const blockChars = block.length;
+
+        // If accumulating this block pushes us over the limits, flush first.
+        if (currentChunkBuf.length > 0 && 
+           (currentWordCount + blockWords > maxWords || currentCharCount + blockChars > maxChars)) {
+            flush();
+        }
+
+        // If the block ITSELF is still too big, we must break it down further
+        if (blockWords > maxWords || blockChars > maxChars) {
+            // Split by single newlines (perfect for code and git diffs)
+            const lines = block.split('\n');
+            
+            for (const line of lines) {
+                const lineWords = countWords(line);
+                const lineChars = line.length;
+
+                // If a SINGLE line is massively oversized (e.g. minified code), slice it brutally
+                if (lineChars > maxChars) {
+                    flush(); // Empty whatever we have
+                    let remainingLine = line;
+                    while (remainingLine.length > 0) {
+                        const slice = remainingLine.substring(0, maxChars);
+                        chunks.push(slice);
+                        remainingLine = remainingLine.substring(maxChars);
+                    }
+                } else {
+                    // Normal line accumulation
+                    if (currentChunkBuf.length > 0 && 
+                       (currentWordCount + lineWords > maxWords || currentCharCount + lineChars > maxChars)) {
+                        flush();
+                    }
+                    currentChunkBuf.push(line);
+                    currentWordCount += lineWords;
+                    currentCharCount += lineChars;
+                }
+            }
+            flush(); // Flush the remainder of the split block
+        } else {
+            // It fits perfectly, accumulate it
+            currentChunkBuf.push(block);
+            currentWordCount += blockWords;
+            currentCharCount += blockChars;
+        }
     }
+
+    flush(); // Final flush
 
     return chunks.filter((c) => c.trim().length > 0);
 }
@@ -107,12 +118,4 @@ export function chunkText(text: string, options: ChunkOptions = {}): string[] {
 
 function countWords(text: string): number {
     return text.trim().split(/\s+/).filter(Boolean).length;
-}
-
-function splitBySentence(text: string): string[] {
-    // Split on period/exclamation/question followed by whitespace or end-of-string
-    return text
-        .split(/(?<=[.!?])\s+/)
-        .map((s) => s.trim())
-        .filter(Boolean);
 }
