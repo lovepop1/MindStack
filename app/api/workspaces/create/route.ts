@@ -54,8 +54,14 @@ export async function POST(req: NextRequest) {
             .single();
 
         if (workspaceError || !workspace) {
+            console.error("[POST /api/workspaces/create] Workspace insert error:", workspaceError);
             return NextResponse.json(
-                { error: workspaceError?.message ?? "Failed to create workspace" },
+                { 
+                    error: workspaceError?.message ?? "Failed to create workspace",
+                    details: workspaceError?.details,
+                    hint: workspaceError?.hint,
+                    code: workspaceError?.code
+                },
                 { status: 500 }
             );
         }
@@ -71,10 +77,16 @@ export async function POST(req: NextRequest) {
             });
 
         if (memberError) {
+            console.error("[POST /api/workspaces/create] Member insert error:", memberError);
             // Rollback: delete the workspace if member insertion fails
             await supabase.from("workspaces").delete().eq("id", workspace.id);
             return NextResponse.json(
-                { error: "Failed to add creator as member" },
+                { 
+                    error: "Failed to add creator as member",
+                    details: memberError?.details,
+                    hint: memberError?.hint,
+                    code: memberError?.code
+                },
                 { status: 500 }
             );
         }

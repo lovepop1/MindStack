@@ -47,6 +47,7 @@ export async function POST(req: NextRequest) {
             .single();
 
         if (workspaceError || !workspace) {
+            console.error("[POST /api/workspaces/join] Workspace lookup error:", workspaceError);
             return NextResponse.json(
                 { error: "Invalid join code or workspace not found" },
                 { status: 404 }
@@ -79,8 +80,14 @@ export async function POST(req: NextRequest) {
             });
 
         if (memberError) {
+            console.error("[POST /api/workspaces/join] Member insert error:", memberError);
             return NextResponse.json(
-                { error: memberError.message },
+                { 
+                    error: memberError.message,
+                    details: memberError?.details,
+                    hint: memberError?.hint,
+                    code: memberError?.code
+                },
                 { status: 500 }
             );
         }
