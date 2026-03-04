@@ -3,8 +3,9 @@ import { createAuthClient, extractJwt } from "@/lib/supabase";
 
 // ---------------------------------------------------------------------------
 // POST /api/sessions/start
-// Body: { project_id: string }
-// Creates a new session tied to a project and returns the session_id.
+// Body: { project_id?: string, workspace_id?: string }
+// Creates a new session tied to a project OR workspace and returns the session_id.
+// Supports dual routing: personal projects OR team workspaces.
 // ---------------------------------------------------------------------------
 export async function POST(req: NextRequest) {
     try {
@@ -12,16 +13,24 @@ export async function POST(req: NextRequest) {
         const supabase = createAuthClient(jwt);
 
         const body = await req.json();
-        const { project_id } = body as { project_id?: string };
+        const { project_id, workspace_id } = body as {
+            project_id?: string;
+            workspace_id?: string;
+        };
 
-        if (!project_id) {
-            return NextResponse.json({ error: "`project_id` is required" }, { status: 400 });
+        // Must have either project_id OR workspace_id
+        if (!project_id && !workspace_id) {
+            return NextResponse.json(
+                { error: "Either `project_id` or `workspace_id` is required" },
+                { status: 400 }
+            );
         }
 
         const { data, error } = await supabase
             .from("sessions")
             .insert({
-                project_id,
+                project_id: project_id ?? null,
+                workspace_id: workspace_id ?? null,
                 start_time: new Date().toISOString(),
                 last_active_at: new Date().toISOString(),
             })

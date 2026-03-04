@@ -320,9 +320,10 @@ curl -X POST https://your-domain.com/api/chat \
 
 1. **Database Schema**: Tables already created
 2. **⚠️ CRITICAL: RLS Policies Required**: Run `supabase_rls_policies.sql` in Supabase SQL Editor
-3. **Environment Variables**: No new variables required
-4. **Backward Compatible**: Deploy without downtime
-5. **Client Updates**: Browser/IDE extensions need updates to support `workspace_id`
+3. **⚠️ CRITICAL: Sessions Table Update**: Run `sessions_workspace_schema.sql` to add workspace_id column
+4. **Environment Variables**: No new variables required
+5. **Backward Compatible**: Deploy without downtime
+6. **Client Updates**: Browser/IDE extensions need updates to support `workspace_id`
 
 ### Required SQL Setup:
 Before the endpoints will work, you MUST apply Row-Level Security policies:
@@ -391,3 +392,107 @@ The Team Workspaces feature is now fully implemented with:
 - ✅ Dynamic system prompts for collaboration
 
 All TypeScript files compile without errors and maintain strict type safety.
+
+
+---
+
+## 🔧 Task 4: Session Management Update (CRITICAL FIX)
+
+### Issue Identified
+The `POST /api/sessions/start` endpoint was hardcoded to require `project_id`, blocking workspace sessions from being created.
+
+### Fix Applied
+
+**File:** `app/api/sessions/start/route.ts`
+
+**Changes:**
+1. Updated payload to accept both `project_id` and `workspace_id`
+2. Validation now requires EITHER `project_id` OR `workspace_id` (not both)
+3. Session insert includes both fields (one will be null)
+
+**Before:**
+```typescript
+const { project_id } = body as { project_id?: string };
+if (!project_id) {
+    return NextResponse.json({ error: "`project_id` is required" }, { status: 400 });
+}
+```
+
+**After:**
+```typescript
+const { project_id, workspace_id } = body as {
+    project_id?: string;
+    workspace_id?: string;
+};
+if (!project_id && !workspace_id) {
+    return NextResponse.json(
+        { error: "Either `project_id` or `workspace_id` is required" },
+        { status: 400 }
+    );
+}
+```
+
+### Database Schema Update Required
+
+Run `sessions_workspace_schema.sql`:
+
+```sql
+ALTER TABLE sessions ADD COLUMN workspace_id UUID REFERENCES workspaces(id);
+ALTER TABLE sessions ALTER COLUMN project_id DROP NOT NULL;
+ALTER TABLE sessions ADD CONSTRAINT sessions_project_or_workspace_check
+CHECK (
+    (project_id IS NOT NULL AND workspace_id IS NULL) OR
+    (project_id IS NULL AND workspace_id IS NOT NULL)
+);
+```
+
+### Other Session Endpoints
+
+- ✅ `POST /api/sessions/heartbeat` - No changes needed (uses session_id)
+- ✅ `POST /api/sessions/end` - No changes needed (uses session_id)
+
+Both endpoints work for personal and workspace sessions since they only require `session_id`.
+
+### API Usage
+
+**Personal Project Session:**
+```bash
+POST /api/sessions/start
+{ "project_id": "uuid-here" }
+```
+
+**Workspace Session:**
+```bash
+POST /api/sessions/start
+{ "workspace_id": "uuid-here" }
+```
+
+See `SESSION_WORKSPACE_UPDATE.md` for complete details and testing checklist.
+
+---
+
+## 📋 Complete Deployment Checklist
+
+### SQL Scripts to Run (in order):
+1. ✅ `supabase_rls_policies.sql` - RLS policies for workspaces and workspace_members
+2. ✅ `sessions_workspace_schema.sql` - Add workspace_id to sessions table
+
+### API Endpoints Updated:
+1. ✅ `POST /api/workspaces/create` - Create workspace
+2. ✅ `POST /api/workspaces/join` - Join workspace
+3. ✅ `GET /api/workspaces` - List workspaces
+4. ✅ `POST /api/sessions/start` - Start session (now supports workspace_id)
+5. ✅ `POST /api/ingest/browser` - Ingest browser captures (workspace support)
+6. ✅ `POST /api/ingest/ide` - Ingest IDE captures (workspace support)
+7. ✅ `POST /api/chat` - RAG chat (workspace support)
+
+### Testing Order:
+1. Apply RLS policies
+2. Apply sessions schema update
+3. Test workspace creation
+4. Test workspace join
+5. Test session start with workspace_id
+6. Test ingestion with workspace_id
+7. Test chat with workspace_id
+
+---
