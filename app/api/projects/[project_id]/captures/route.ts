@@ -14,6 +14,13 @@ interface RouteParams {
 // Ordered by created_at DESC for timeline rendering.
 // RLS ensures the user can only see their own project's data.
 // ---------------------------------------------------------------------------
+
+// Add these three lines to the VERY TOP of the file!
+export const dynamic = 'force-dynamic';
+export const fetchCache = 'force-no-store';
+export const revalidate = 0;
+
+
 export async function GET(req: NextRequest, { params }: RouteParams) {
     try {
         const jwt = extractJwt(req);
