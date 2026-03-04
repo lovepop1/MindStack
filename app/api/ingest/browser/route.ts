@@ -28,6 +28,7 @@ export async function POST(req: NextRequest) {
     try {
         const jwt = extractJwt(req);
         const supabase = createAuthClient(jwt);
+        const adminSupabase = createAdminClient();
 
         // Resolve the user_id from the JWT
         const {
@@ -152,7 +153,7 @@ export async function POST(req: NextRequest) {
                 file_name: a.file_name,
             }));
 
-            const { error: attError } = await supabase
+            const { error: attError } = await adminSupabase
                 .from("capture_attachments")
                 .insert(attachmentRows);
 
