@@ -34,19 +34,21 @@ export async function POST(req: NextRequest) {
 
     const supabase = createAuthClient(jwt);
 
-    let project_id: string;
+    let project_id: string | undefined;
+    let workspace_id: string | undefined;
     let current_query: string;
     let incomingMessages: { role: "user" | "assistant"; content: string }[];
 
     try {
         const body = await req.json();
         project_id = body.project_id;
+        workspace_id = body.workspace_id;
         current_query = body.current_query;
         incomingMessages = body.messages ?? [];
 
-        if (!project_id || !current_query) {
+        if ((!project_id && !workspace_id) || !current_query) {
             return new Response(
-                JSON.stringify({ error: "`project_id` and `current_query` are required" }),
+                JSON.stringify({ error: "Either `project_id` or `workspace_id`, and `current_query` are required" }),
                 { status: 400, headers: { "Content-Type": "application/json" } }
             );
         }
@@ -82,28 +84,53 @@ export async function POST(req: NextRequest) {
 
                 // ----------------------------------------------------------------
                 // Step 2: pgvector similarity search — LIMIT 5 to prevent overflow
+                // Route to appropriate RPC based on project_id vs workspace_id
                 // ----------------------------------------------------------------
-                const { data: matchedChunks, error: rpcError } = await supabase.rpc(
-                    "match_captures",
-                    {
-                        query_embedding: queryEmbedding,
-                        match_project_id: project_id,
-                        match_count: 5,
-                    }
-                );
-
-                if (rpcError) {
-                    console.error("[chat] pgvector RPC error:", rpcError);
-                    emit({ type: "error", data: "Vector search failed" });
-                    controller.close();
-                    return;
-                }
-
-                const chunks = (matchedChunks as {
+                let matchedChunks: {
                     capture_id: string;
                     chunk_text: string;
                     similarity: number;
-                }[]) ?? [];
+                }[] = [];
+
+                if (workspace_id) {
+                    const { data, error: rpcError } = await supabase.rpc(
+                        "match_workspace_captures",
+                        {
+                            query_embedding: queryEmbedding,
+                            target_workspace_id: workspace_id,
+                            match_count: 5,
+                        }
+                    );
+
+                    if (rpcError) {
+                        console.error("[chat] pgvector RPC error (workspace):", rpcError);
+                        emit({ type: "error", data: "Vector search failed" });
+                        controller.close();
+                        return;
+                    }
+
+                    matchedChunks = (data as typeof matchedChunks) ?? [];
+                } else if (project_id) {
+                    const { data, error: rpcError } = await supabase.rpc(
+                        "match_captures",
+                        {
+                            query_embedding: queryEmbedding,
+                            match_project_id: project_id,
+                            match_count: 5,
+                        }
+                    );
+
+                    if (rpcError) {
+                        console.error("[chat] pgvector RPC error (project):", rpcError);
+                        emit({ type: "error", data: "Vector search failed" });
+                        controller.close();
+                        return;
+                    }
+
+                    matchedChunks = (data as typeof matchedChunks) ?? [];
+                }
+
+                const chunks = matchedChunks;
 
                 // ----------------------------------------------------------------
                 // Step 3: Gather parent captures, sessions, and attachments
@@ -120,6 +147,7 @@ export async function POST(req: NextRequest) {
                     ide_code_diff: string | null;
                     ide_error_log: string | null;
                     source_url: string | null;
+                    author_display_name: string | null;
                     // Supabase returns related rows as arrays even for to-one relations
                     sessions: { active_file_context: string | null }[] | null;
                     capture_attachments: {
@@ -134,7 +162,7 @@ export async function POST(req: NextRequest) {
                         .from("captures")
                         .select(
                             `id, session_id, capture_type, page_title, text_content, ai_markdown_summary,
-               ide_code_diff, ide_error_log, source_url,
+               ide_code_diff, ide_error_log, source_url, author_display_name,
                sessions ( active_file_context ),
                capture_attachments ( s3_url, file_type, file_name )`
                         )
@@ -205,6 +233,11 @@ export async function POST(req: NextRequest) {
                     captureBlock.push(`[DOCUMENT ${idx + 1}]`);
                     captureBlock.push(`Source Type: ${capture.capture_type}`);
 
+                    // Include author attribution for workspace captures
+                    if (capture.author_display_name) {
+                        captureBlock.push(`Contributed by: ${capture.author_display_name}`);
+                    }
+
                     if (capture.page_title) {
                         captureBlock.push(`Title: ${capture.page_title}`);
                     }
@@ -253,7 +286,7 @@ export async function POST(req: NextRequest) {
                 // ----------------------------------------------------------------
                 // Step 6: Build Claude multimodal messages
                 // ----------------------------------------------------------------
-                const systemPrompt = `You are MindStack, an AI assistant with deep knowledge of a developer's learning history.
+                let systemPrompt = `You are MindStack, an AI assistant with deep knowledge of a developer's learning history.
 Answer questions accurately using the provided context. Reference specific captures, diffs, or file names when relevant.
 
 Formatting Rules:
@@ -261,6 +294,11 @@ Formatting Rules:
 Always use markdown.
 When writing code, use fenced code blocks with the correct language (e.g., \`\`\`python).
 If a user asks about an image, diagram, or video frame, look in the retrieved context for its URL. You must embed the image directly in your response using markdown syntax: ![Image Description](https://your-s3-bucket-url.com/image.png).`;
+
+                // Dynamic system prompt for workspace mode
+                if (workspace_id) {
+                    systemPrompt += `\n\nYou are operating in a collaborative team workspace. Pay close attention to the [Contributed by: Name] tags in the context. If asked about a specific person's work, filter your answer based on those tags. If asked for a team summary, synthesize everyone's contributions.`;
+                }
 
                 // Reconstruct message history from the request
                 const historyMessages: ClaudeMessage[] = incomingMessages.slice(-10).map((m) => ({
@@ -279,15 +317,19 @@ If a user asks about an image, diagram, or video frame, look in the retrieved co
                 } else {
                     // No captures ingested yet — force Claude to return the exact empty state
                     // markdown that the frontend expects.
+                    const emptyStateMessage = workspace_id
+                        ? `No captures have been ingested into this workspace yet.`
+                        : `No captures have been ingested into MindStack yet for this project.`;
+
                     userContent.push({
                         type: "text",
-                        text: `No captures have been ingested into MindStack yet for this project. 
+                        text: `${emptyStateMessage} 
                         
 You MUST reply with exactly this markdown text, word for word, and NOTHING else:
 
 🧠
 ### No Progress Data Available
-I don't have any captured activity or progress data available for your project yet. To start tracking your development journey, you'll need to:
+I don't have any captured activity or progress data available for your ${workspace_id ? "workspace" : "project"} yet. To start tracking your development journey, you'll need to:
 * Install the MindStack browser extension or IDE plugin
 * Begin capturing your coding sessions, web research, and other development activities
 

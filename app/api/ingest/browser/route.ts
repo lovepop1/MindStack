@@ -29,10 +29,21 @@ export async function POST(req: NextRequest) {
         const jwt = extractJwt(req);
         const supabase = createAuthClient(jwt);
 
+        // Resolve the user_id from the JWT
+        const {
+            data: { user },
+            error: userError,
+        } = await supabase.auth.getUser(jwt);
+
+        if (userError || !user) {
+            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        }
+
         const body = await req.json();
         const {
             session_id,
             project_id,
+            workspace_id,
             capture_type,
             text_content,
             caption_text,
@@ -45,6 +56,7 @@ export async function POST(req: NextRequest) {
         } = body as {
             session_id?: string;
             project_id?: string;
+            workspace_id?: string;
             capture_type?: BrowserCaptureType;
             text_content?: string;
             caption_text?: string;
@@ -59,9 +71,17 @@ export async function POST(req: NextRequest) {
         const final_text_content = text_content || caption_text || null;
 
         // -- Validate required fields -------------------------------------------
-        if (!session_id || !project_id || !capture_type) {
+        if (!session_id || !capture_type) {
             return NextResponse.json(
-                { error: "`session_id`, `project_id`, and `capture_type` are required" },
+                { error: "`session_id` and `capture_type` are required" },
+                { status: 400 }
+            );
+        }
+
+        // Must have either project_id OR workspace_id
+        if (!project_id && !workspace_id) {
+            return NextResponse.json(
+                { error: "Either `project_id` or `workspace_id` is required" },
                 { status: 400 }
             );
         }
@@ -76,12 +96,35 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: `Invalid capture_type: ${capture_type}` }, { status: 400 });
         }
 
+        // -- Attribution Lookup (for workspace mode) ----------------------------
+        let author_display_name: string | null = null;
+        if (workspace_id) {
+            const { data: member, error: memberError } = await supabase
+                .from("workspace_members")
+                .select("display_name")
+                .eq("workspace_id", workspace_id)
+                .eq("user_id", user.id)
+                .single();
+
+            if (memberError || !member) {
+                return NextResponse.json(
+                    { error: "User is not a member of this workspace" },
+                    { status: 403 }
+                );
+            }
+
+            author_display_name = member.display_name;
+        }
+
         // -- Sync: Insert capture row -------------------------------------------
         const { data: captureRow, error: captureError } = await supabase
             .from("captures")
             .insert({
                 session_id,
-                project_id,
+                project_id: project_id ?? null,
+                workspace_id: workspace_id ?? null,
+                author_id: workspace_id ? user.id : null,
+                author_display_name: author_display_name,
                 capture_type,
                 source_url: source_url ?? null,
                 page_title: page_title ?? null,
@@ -128,7 +171,9 @@ export async function POST(req: NextRequest) {
         // -- Async: Embed pipeline (Wait for Vercel Serverless to finish) ------
         await processBrowserCaptureAsync({
             capture_id,
-            project_id,
+            project_id: project_id ?? null,
+            workspace_id: workspace_id ?? null,
+            author_display_name,
             capture_type,
             text_content: final_text_content ?? "",
             caption_text,
@@ -154,7 +199,9 @@ export async function POST(req: NextRequest) {
 // ---------------------------------------------------------------------------
 async function processBrowserCaptureAsync(args: {
     capture_id: string;
-    project_id: string;
+    project_id: string | null;
+    workspace_id: string | null;
+    author_display_name: string | null;
     capture_type: BrowserCaptureType;
     text_content: string;
     caption_text?: string;
@@ -274,7 +321,8 @@ async function processBrowserCaptureAsync(args: {
 
     const chunkRows: {
         capture_id: string;
-        project_id: string;
+        project_id: string | null;
+        workspace_id: string | null;
         chunk_text: string;
         embedding: number[];
         chunk_index: number;
@@ -282,11 +330,18 @@ async function processBrowserCaptureAsync(args: {
 
     for (let i = 0; i < chunks.length; i++) {
         try {
-            const embedding = await invokeTitanEmbedding(chunks[i]);
+            // CRITICAL: Prepend author attribution for workspace captures
+            let chunkText = chunks[i];
+            if (args.workspace_id && args.author_display_name) {
+                chunkText = `[Contributed by: ${args.author_display_name}]\n\n${chunks[i]}`;
+            }
+
+            const embedding = await invokeTitanEmbedding(chunkText);
             chunkRows.push({
                 capture_id: args.capture_id,
                 project_id: args.project_id,
-                chunk_text: chunks[i],
+                workspace_id: args.workspace_id,
+                chunk_text: chunkText,
                 embedding,
                 chunk_index: i,
             });

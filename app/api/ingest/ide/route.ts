@@ -21,10 +21,21 @@ export async function POST(req: NextRequest) {
         const jwt = extractJwt(req);
         const supabase = createAuthClient(jwt);
 
+        // Resolve the user_id from the JWT
+        const {
+            data: { user },
+            error: userError,
+        } = await supabase.auth.getUser(jwt);
+
+        if (userError || !user) {
+            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        }
+
         const body = await req.json();
         const {
             session_id,
             project_id,
+            workspace_id,
             capture_type,
             ide_error_log,
             ide_code_diff,
@@ -34,6 +45,7 @@ export async function POST(req: NextRequest) {
         } = body as {
             session_id?: string;
             project_id?: string;
+            workspace_id?: string;
             capture_type?: IdeCaptureType;
             ide_error_log?: string;
             ide_code_diff?: string;
@@ -43,9 +55,17 @@ export async function POST(req: NextRequest) {
         };
 
         // -- Validate ------------------------------------------------------------
-        if (!session_id || !project_id || !capture_type) {
+        if (!session_id || !capture_type) {
             return NextResponse.json(
-                { error: "`session_id`, `project_id`, and `capture_type` are required" },
+                { error: "`session_id` and `capture_type` are required" },
+                { status: 400 }
+            );
+        }
+
+        // Must have either project_id OR workspace_id
+        if (!project_id && !workspace_id) {
+            return NextResponse.json(
+                { error: "Either `project_id` or `workspace_id` is required" },
                 { status: 400 }
             );
         }
@@ -53,6 +73,26 @@ export async function POST(req: NextRequest) {
         const validTypes: IdeCaptureType[] = ["IDE_BUG_FIX", "IDE_PROGRESS_SNAPSHOT"];
         if (!validTypes.includes(capture_type)) {
             return NextResponse.json({ error: `Invalid capture_type: ${capture_type}` }, { status: 400 });
+        }
+
+        // -- Attribution Lookup (for workspace mode) ----------------------------
+        let author_display_name: string | null = null;
+        if (workspace_id) {
+            const { data: member, error: memberError } = await supabase
+                .from("workspace_members")
+                .select("display_name")
+                .eq("workspace_id", workspace_id)
+                .eq("user_id", user.id)
+                .single();
+
+            if (memberError || !member) {
+                return NextResponse.json(
+                    { error: "User is not a member of this workspace" },
+                    { status: 403 }
+                );
+            }
+
+            author_display_name = member.display_name;
         }
 
         // -- Sync: Insert capture ------------------------------------------------
@@ -67,7 +107,10 @@ export async function POST(req: NextRequest) {
             .from("captures")
             .insert({
                 session_id,
-                project_id,
+                project_id: project_id ?? null,
+                workspace_id: workspace_id ?? null,
+                author_id: workspace_id ? user.id : null,
+                author_display_name: author_display_name,
                 capture_type,
                 text_content: initialTextContent,
                 ide_error_log: ide_error_log ?? null,
@@ -90,7 +133,9 @@ export async function POST(req: NextRequest) {
         // -- Async: Pipeline -----------------------------------------------------
         processIdeAsync({
             capture_id,
-            project_id,
+            project_id: project_id ?? null,
+            workspace_id: workspace_id ?? null,
+            author_display_name,
             capture_type,
             ide_error_log: ide_error_log ?? "",
             ide_code_diff: ide_code_diff ?? "",
@@ -113,7 +158,9 @@ export async function POST(req: NextRequest) {
 // ---------------------------------------------------------------------------
 async function processIdeAsync(args: {
     capture_id: string;
-    project_id: string;
+    project_id: string | null;
+    workspace_id: string | null;
+    author_display_name: string | null;
     capture_type: IdeCaptureType;
     ide_error_log: string;
     ide_code_diff: string;
@@ -182,7 +229,8 @@ ${rawContent.slice(0, 15000)}`;
 
     const chunkRows: {
         capture_id: string;
-        project_id: string;
+        project_id: string | null;
+        workspace_id: string | null;
         chunk_text: string;
         embedding: number[];
         chunk_index: number;
@@ -190,11 +238,18 @@ ${rawContent.slice(0, 15000)}`;
 
     for (let i = 0; i < allTextChunks.length; i++) {
         try {
-            const embedding = await invokeTitanEmbedding(allTextChunks[i]);
+            // CRITICAL: Prepend author attribution for workspace captures
+            let chunkText = allTextChunks[i];
+            if (args.workspace_id && args.author_display_name) {
+                chunkText = `[Contributed by: ${args.author_display_name}]\n\n${allTextChunks[i]}`;
+            }
+
+            const embedding = await invokeTitanEmbedding(chunkText);
             chunkRows.push({
                 capture_id: args.capture_id,
                 project_id: args.project_id,
-                chunk_text: allTextChunks[i],
+                workspace_id: args.workspace_id,
+                chunk_text: chunkText,
                 embedding,
                 chunk_index: i,
             });
