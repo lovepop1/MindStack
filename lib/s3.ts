@@ -40,9 +40,10 @@ export async function getPutPresignedUrl(
     // 🚨 REMOVE ContentType entirely. 
     // This tells AWS: "Just accept the raw bytes."
     const command = new PutObjectCommand({
-        Bucket: bucket,
-        Key: key,
-    });
+            Bucket: bucket,
+            Key: key,
+            ContentType: fileType, 
+        });
 
     const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
     const s3Url = `https://${bucket}.s3.${process.env.NEXT_PUBLIC_AWS_REGION}.amazonaws.com/${key}`;
