@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAuthClient, createAdminClient, extractJwt } from "@/lib/supabase";
-import { invokeTitanEmbedding } from "@/lib/bedrock"; // Removed Haiku import
+import { invokeClaudeHaiku, invokeTitanEmbedding } from "@/lib/bedrock"; // ✅ Haiku is back!
 import { chunkText } from "@/lib/chunker";
 
 // ---------------------------------------------------------------------------
@@ -10,17 +10,14 @@ type IdeCaptureType = "IDE_BUG_FIX" | "IDE_PROGRESS_SNAPSHOT";
 
 // ---------------------------------------------------------------------------
 // POST /api/ingest/ide
-// Body: { session_id, project_id, capture_type, ide_error_log?, ide_code_diff?,
-//         repo_tree?, ide_file_path? }
-// Sync: Insert capture, return 200.
-// Async: Chunk & embed the raw code/error directly with Titan.
+// Sync: Insert beautifully formatted capture, return 200.
+// Async: Haiku translates the code. BOTH raw code and translation are embedded.
 // ---------------------------------------------------------------------------
 export async function POST(req: NextRequest) {
     try {
         const jwt = extractJwt(req);
         const supabase = createAuthClient(jwt);
 
-        // Resolve the user_id from the JWT
         const {
             data: { user },
             error: userError,
@@ -53,20 +50,12 @@ export async function POST(req: NextRequest) {
             priority?: number;
         };
 
-        // -- Validate ------------------------------------------------------------
         if (!session_id || !capture_type) {
-            return NextResponse.json(
-                { error: "`session_id` and `capture_type` are required" },
-                { status: 400 }
-            );
+            return NextResponse.json({ error: "`session_id` and `capture_type` are required" }, { status: 400 });
         }
 
-        // Must have either project_id OR workspace_id
         if (!project_id && !workspace_id) {
-            return NextResponse.json(
-                { error: "Either `project_id` or `workspace_id` is required" },
-                { status: 400 }
-            );
+            return NextResponse.json({ error: "Either `project_id` or `workspace_id` is required" }, { status: 400 });
         }
 
         const validTypes: IdeCaptureType[] = ["IDE_BUG_FIX", "IDE_PROGRESS_SNAPSHOT"];
@@ -74,7 +63,6 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: `Invalid capture_type: ${capture_type}` }, { status: 400 });
         }
 
-        // -- Attribution Lookup (for workspace mode) ----------------------------
         let author_display_name: string | null = null;
         if (workspace_id) {
             const { data: member, error: memberError } = await supabase
@@ -84,23 +72,18 @@ export async function POST(req: NextRequest) {
                 .eq("user_id", user.id)
                 .single();
 
-            if (memberError || !member) {
-                return NextResponse.json(
-                    { error: "User is not a member of this workspace" },
-                    { status: 403 }
-                );
-            }
-
+            if (memberError || !member) return NextResponse.json({ error: "User is not a member of this workspace" }, { status: 403 });
             author_display_name = member.display_name;
         }
 
-        // -- Sync: Insert capture ------------------------------------------------
-        // Build a text_content preview from available IDE fields so the card is
-        // immediately populated.
+        // Build a comprehensive preview for the frontend so it's not empty while Haiku thinks
         const textParts: string[] = [];
-        if (ide_error_log) textParts.push(`## Error Log\n${ide_error_log}`);
-        if (ide_code_diff) textParts.push(`## Code Diff\n${ide_code_diff}`);
-        const initialTextContent = textParts.join("\n\n") || null;
+        if (ide_file_path) textParts.push(`**File:** \`${ide_file_path}\``);
+        if (ide_error_log) textParts.push(`**Error Log:**\n\`\`\`text\n${ide_error_log}\n\`\`\``);
+        if (ide_code_diff) textParts.push(`**Code Changes:**\n\`\`\`diff\n${ide_code_diff}\n\`\`\``);
+        if (repo_tree) textParts.push(`**Repository State:**\n\`\`\`text\n${repo_tree}\n\`\`\``);
+        
+        const initialTextContent = textParts.join("\n\n") || "*IDE snapshot captured with no distinct file changes.*";
 
         const { data: captureRow, error: captureError } = await supabase
             .from("captures")
@@ -111,8 +94,8 @@ export async function POST(req: NextRequest) {
                 author_id: workspace_id ? user.id : null,
                 author_display_name: author_display_name,
                 capture_type,
-                text_content: initialTextContent,
-                ai_markdown_summary: null, // Explicitly skip summary
+                text_content: initialTextContent, 
+                ai_markdown_summary: null, // Haiku will update this asynchronously
                 ide_error_log: ide_error_log ?? null,
                 ide_code_diff: ide_code_diff ?? null,
                 ide_file_path: ide_file_path ?? null,
@@ -121,16 +104,11 @@ export async function POST(req: NextRequest) {
             .select("id")
             .single();
 
-        if (captureError || !captureRow) {
-            return NextResponse.json({ error: captureError?.message ?? "Insert failed" }, { status: 500 });
-        }
+        if (captureError || !captureRow) return NextResponse.json({ error: captureError?.message ?? "Insert failed" }, { status: 500 });
 
         const capture_id = captureRow.id;
-
-        // -- Respond immediately -------------------------------------------------
         const response = NextResponse.json({ capture_id }, { status: 200 });
 
-        // -- Async: Pipeline -----------------------------------------------------
         processIdeAsync({
             capture_id,
             project_id: project_id ?? null,
@@ -141,9 +119,7 @@ export async function POST(req: NextRequest) {
             ide_code_diff: ide_code_diff ?? "",
             repo_tree: repo_tree ?? "",
             ide_file_path: ide_file_path ?? "",
-        }).catch((err) =>
-            console.error(`[ingest/ide] Async pipeline failed for ${capture_id}:`, err)
-        );
+        }).catch((err) => console.error(`[ingest/ide] Async pipeline failed for ${capture_id}:`, err));
 
         return response;
     } catch (err) {
@@ -173,23 +149,42 @@ async function processIdeAsync(args: {
         args.ide_error_log && `## Error Log\n${args.ide_error_log}`,
         args.ide_code_diff && `## Code Diff\n${args.ide_code_diff}`,
         args.repo_tree && `## Repo Structure\n${args.repo_tree}`,
-    ]
-        .filter(Boolean)
-        .join("\n\n");
+    ].filter(Boolean).join("\n\n");
 
-    if (!rawContent.trim()) {
-        console.log(`[ingest/ide] No content to process for capture ${args.capture_id}`);
-        return;
+    if (!rawContent.trim()) return;
+
+    // -- Step 1: Haiku translates raw code/error → plain English explanation --
+    let plainEnglishExplanation = "";
+    try {
+        const translationPrompt = `You are a senior developer assistant. Below is raw IDE output from a developer's coding session.
+Convert this into two things, formatted in Markdown:
+1. **Plain-English Explanation**: What problem occurred and how it was (or is being) resolved.
+2. **Key Learning**: The underlying technical concept or pattern involved.
+Be concise but precise. Use code blocks for any code references.
+
+---
+${rawContent.slice(0, 15000)}`;
+
+        plainEnglishExplanation = await invokeClaudeHaiku(translationPrompt);
+
+        // Update the database so the frontend UI can show the Haiku summary
+        await admin
+            .from("captures")
+            .update({ ai_markdown_summary: plainEnglishExplanation })
+            .eq("id", args.capture_id);
+    } catch (haikuErr) {
+        console.error(`[ingest/ide] Haiku translation failed for ${args.capture_id}:`, haikuErr);
     }
 
-    // -- Step 1: Chunk the raw code directly (Skipping Haiku translation) -----
-    // Skip IDE auto-generated files in the repo tree
-    const rawChunks = chunkText(rawContent, {
-        fileName: args.ide_file_path || undefined,
-    });
+    // -- Step 2: Chunk BOTH raw code AND English translation ------------------
+    const rawChunks = chunkText(rawContent, { fileName: args.ide_file_path || undefined });
+    const englishChunks = plainEnglishExplanation ? chunkText(plainEnglishExplanation) : [];
 
-    // Label them for retrieval context
-    const allTextChunks = rawChunks.map((c) => `[RAW]\n${c}`);
+    // Combine both sets, labeling them for retrieval context
+    const allTextChunks = [
+        ...rawChunks.map((c) => `[RAW CODE]\n${c}`),
+        ...englishChunks.map((c) => `[EXPLANATION]\n${c}`),
+    ];
 
     if (allTextChunks.length === 0) return;
 
@@ -202,16 +197,18 @@ async function processIdeAsync(args: {
         chunk_index: number;
     }[] = [];
 
-    // -- Step 2: Embed + Save ------------------------------------------------
+    // -- Step 3: Embed + Save ------------------------------------------------
     for (let i = 0; i < allTextChunks.length; i++) {
         try {
-            // CRITICAL: Prepend author attribution for workspace captures
-            let chunkTextData = allTextChunks[i];
+            let metadataHeader = `[Context: The developer captured a ${args.capture_type.replace(/_/g, " ")}]`;
+            if (args.ide_file_path) metadataHeader += `\n[File Path: ${args.ide_file_path}]`;
             if (args.workspace_id && args.author_display_name) {
-                chunkTextData = `[Contributed by: ${args.author_display_name}]\n\n${allTextChunks[i]}`;
+                metadataHeader += `\n[Contributed by Team Member: ${args.author_display_name}]`;
             }
 
+            const chunkTextData = `${metadataHeader}\n\n${allTextChunks[i]}`;
             const embedding = await invokeTitanEmbedding(chunkTextData);
+            
             chunkRows.push({
                 capture_id: args.capture_id,
                 project_id: args.project_id,
@@ -221,21 +218,11 @@ async function processIdeAsync(args: {
                 chunk_index: i,
             });
         } catch (embedErr) {
-            console.error(
-                `[ingest/ide] Embedding failed for chunk ${i} of ${args.capture_id}:`,
-                embedErr
-            );
+            console.error(`[ingest/ide] Embedding failed for chunk ${i}:`, embedErr);
         }
     }
 
     if (chunkRows.length > 0) {
-        const { error } = await admin.from("capture_chunks").insert(chunkRows);
-        if (error) {
-            console.error(`[ingest/ide] Chunk insert failed for ${args.capture_id}:`, error);
-        } else {
-            console.log(
-                `[ingest/ide] Saved ${chunkRows.length} chunks (raw code) for ${args.capture_id}`
-            );
-        }
+        await admin.from("capture_chunks").insert(chunkRows);
     }
 }
