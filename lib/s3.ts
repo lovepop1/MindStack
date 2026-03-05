@@ -36,19 +36,18 @@ export async function getPutPresignedUrl(
     const s3 = getS3Client();
     const bucket = getBucket();
 
-    // Namespace uploads under a timestamped prefix to avoid collisions
     const key = `uploads/${Date.now()}-${fileName}`;
 
+    // 1. We keep ContentType here so S3 knows exactly what file type to expect
     const command = new PutObjectCommand({
         Bucket: bucket,
         Key: key,
-        ContentType: fileType,
+        ContentType: fileType, 
     });
 
-    const uploadUrl = await getSignedUrl(s3, command, { 
-        expiresIn: 900,
-        signableHeaders: new Set(["content-type"])
-    });
+    // 2. REMOVE signableHeaders entirely. Let the SDK calculate it natively.
+    const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
+    
     const s3Url = `https://${bucket}.s3.${process.env.NEXT_PUBLIC_AWS_REGION}.amazonaws.com/${key}`;
 
     return { uploadUrl, s3Url };
