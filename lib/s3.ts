@@ -45,7 +45,10 @@ export async function getPutPresignedUrl(
         ContentType: fileType,
     });
 
-    const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
+    const uploadUrl = await getSignedUrl(s3, command, { 
+        expiresIn: 900,
+        signableHeaders: new Set(["content-type"])
+    });
     const s3Url = `https://${bucket}.s3.${process.env.NEXT_PUBLIC_AWS_REGION}.amazonaws.com/${key}`;
 
     return { uploadUrl, s3Url };
