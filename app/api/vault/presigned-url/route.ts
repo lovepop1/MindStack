@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { NextRequest, NextResponse } from "next/server";
 import { extractJwt } from "@/lib/supabase";
 import { getPutPresignedUrl } from "@/lib/s3";
