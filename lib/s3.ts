@@ -37,19 +37,17 @@ export async function getPutPresignedUrl(
     const bucket = getBucket();
     const key = `uploads/${Date.now()}-${fileName}`;
 
+    // S3 expects the exact file type
     const command = new PutObjectCommand({
         Bucket: bucket,
         Key: key,
         ContentType: fileType, 
     });
 
-    // 🚨 We MUST force AWS to lock the exact Content-Type into the signature
-    const uploadUrl = await getSignedUrl(s3, command, { 
-        expiresIn: 900,
-        signableHeaders: new Set(["content-type"])
-    });
-    
+    // Generate URL normally
+    const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
     const s3Url = `https://${bucket}.s3.${process.env.NEXT_PUBLIC_AWS_REGION}.amazonaws.com/${key}`;
+
     return { uploadUrl, s3Url };
 }
 
