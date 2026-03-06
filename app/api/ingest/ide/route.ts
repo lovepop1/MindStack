@@ -103,14 +103,31 @@ export async function POST(req: NextRequest) {
                         initial_stacktrace: safePayload.initial_stacktrace,
                     });
                     if (error) throw error;
-                    await supabase.from("captures").insert({
+
+                    // 🚨 DROPS CARD & TRIGGERS AI
+                    const { data: captureRow } = await supabase.from("captures").insert({
                         session_id,
                         project_id: project_id ?? null,
                         workspace_id: workspace_id ?? null,
                         author_display_name: author_display_name,
                         capture_type: "IDE_DEBUG_EPISODE_START",
-                        text_content: `🚨 Started bug hunt.\nError: ${safePayload.initial_error_message}`,
-                    });
+                        text_content: `🚨 Started bug hunt.\nCommand: ${safePayload.initial_command}\nError: ${safePayload.initial_error_message}`,
+                    }).select("id").single();
+
+                    if (captureRow) {
+                        processIdeAsync({
+                            capture_id: captureRow.id,
+                            project_id: project_id ?? null,
+                            workspace_id: workspace_id ?? null,
+                            author_display_name,
+                            capture_type: "IDE_DEBUG_EPISODE_START",
+                            ide_error_log: safePayload.initial_error_message ?? "",
+                            ide_code_diff: "",
+                            repo_tree: "",
+                            ide_file_path: "",
+                        }).catch(console.error);
+                    }
+
                     return NextResponse.json({ success: true, message: "Episode started" }, { status: 200 });
                 }
                 case "IDE_DEBUG_EPISODE_UPDATE": {
@@ -122,12 +139,8 @@ export async function POST(req: NextRequest) {
                     return NextResponse.json({ success: true, message: "Episode updated" }, { status: 200 });
                 }
                 case "IDE_DEBUG_EPISODE_RESOLVED": {
-                    // 🚨 Add this validation check!
                     if (!safePayload.fingerprint) {
-                        return NextResponse.json(
-                            { error: "Missing 'fingerprint' in payload. Required for Bug Knowledge Base." }, 
-                            { status: 400 }
-                        );
+                        return NextResponse.json({ error: "Missing fingerprint" }, { status: 400 });
                     }
 
                     await supabase.from("debug_episodes").update({
@@ -143,16 +156,32 @@ export async function POST(req: NextRequest) {
                         files_changed: safePayload.files_changed
                     });
                     if (error) throw error;
-                    // 🚨 ADD THIS: Drop a visual card into the timeline showing the fix!
-                    await supabase.from("captures").insert({
+
+                    // 🚨 DROPS CARD & TRIGGERS AI
+                    const { data: captureRow } = await supabase.from("captures").insert({
                         session_id,
                         project_id: project_id ?? null,
                         workspace_id: workspace_id ?? null,
                         author_display_name: author_display_name,
                         capture_type: "IDE_DEBUG_EPISODE_RESOLVED",
-                        text_content: `✅ Bug successfully resolved!\nCommand: ${safePayload.resolution_command}`,
-                        ide_code_diff: safePayload.git_diff_fix, // Show the exact code that fixed it!
-                    });
+                        text_content: `✅ Bug successfully resolved!\nResolution Command: ${safePayload.resolution_command}`,
+                        ide_code_diff: safePayload.git_diff_fix, 
+                    }).select("id").single();
+
+                    if (captureRow) {
+                        processIdeAsync({
+                            capture_id: captureRow.id,
+                            project_id: project_id ?? null,
+                            workspace_id: workspace_id ?? null,
+                            author_display_name,
+                            capture_type: "IDE_DEBUG_EPISODE_RESOLVED",
+                            ide_error_log: "",
+                            ide_code_diff: safePayload.git_diff_fix ?? "",
+                            repo_tree: "",
+                            ide_file_path: safePayload.files_changed?.[0] ?? "", 
+                        }).catch(console.error);
+                    }
+
                     return NextResponse.json({ success: true, message: "Bug resolved" }, { status: 200 });
                 }
             }
