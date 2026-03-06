@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
             repo_tree,
             ide_file_path,
             priority,
-            payload // NEW: Extracted for the rich JSON telemetry
+            payload // 🚨 Extracted for the rich JSON telemetry
         } = body as {
             session_id?: string;
             project_id?: string;
@@ -87,186 +87,137 @@ export async function POST(req: NextRequest) {
 
         const safePayload = payload || {};
 
-        // ─── NEW ARCHITECTURE: INTELLIGENT DEBUG EPISODES ────────────────────
-        // These route directly to the new relational tables and return 200 immediately.
-        if (capture_type.startsWith("IDE_DEBUG_EPISODE")) {
-            switch (capture_type) {
-                case "IDE_DEBUG_EPISODE_START": {
-                    const { error } = await supabase.from("debug_episodes").insert({
-                        episode_id: safePayload.episode_id,
-                        session_id,
-                        project_id: project_id ?? null,
-                        workspace_id: workspace_id ?? null,
-                        status: 'DEBUGGING',
-                        initial_command: safePayload.initial_command,
-                        initial_error_message: safePayload.initial_error_message,
-                        initial_stacktrace: safePayload.initial_stacktrace,
-                    });
-                    if (error) throw error;
+        // ─── MASTER ROUTER: HANDLES ALL 6 TELEMETRY TYPES CLEANLY ────────────────────
+        switch (capture_type) {
+            
+            // 1. BUG HUNT STARTED
+            case "IDE_DEBUG_EPISODE_START": {
+                const { error } = await supabase.from("debug_episodes").insert({
+                    episode_id: safePayload.episode_id,
+                    session_id,
+                    project_id: project_id ?? null,
+                    workspace_id: workspace_id ?? null,
+                    status: 'DEBUGGING',
+                    initial_command: safePayload.initial_command,
+                    initial_error_message: safePayload.initial_error_message,
+                    initial_stacktrace: safePayload.initial_stacktrace,
+                });
+                if (error) throw error;
 
-                    // 🚨 DROPS CARD & TRIGGERS AI
-                    const { data: captureRow } = await supabase.from("captures").insert({
-                        session_id,
-                        project_id: project_id ?? null,
-                        workspace_id: workspace_id ?? null,
-                        author_display_name: author_display_name,
-                        capture_type: "IDE_DEBUG_EPISODE_START",
-                        text_content: `🚨 Started bug hunt.\nCommand: ${safePayload.initial_command}\nError: ${safePayload.initial_error_message}`,
-                        snapshot_metadata: safePayload
-                    }).select("id").single();
+                const { data: captureRow } = await supabase.from("captures").insert({
+                    session_id, project_id: project_id ?? null, workspace_id: workspace_id ?? null,
+                    author_display_name: author_display_name, capture_type: "IDE_DEBUG_EPISODE_START",
+                    text_content: `🚨 Started bug hunt.\nCommand: ${safePayload.initial_command}\nError: ${safePayload.initial_error_message}`,
+                    snapshot_metadata: safePayload
+                }).select("id").single();
 
-                    if (captureRow) {
-                        processIdeAsync({
-                            capture_id: captureRow.id,
-                            project_id: project_id ?? null,
-                            workspace_id: workspace_id ?? null,
-                            author_display_name,
-                            capture_type: "IDE_DEBUG_EPISODE_START",
-                            ide_error_log: safePayload.initial_error_message ?? "",
-                            ide_code_diff: "",
-                            repo_tree: "",
-                            ide_file_path: "",
-                        }).catch(console.error);
-                    }
-
-                    return NextResponse.json({ success: true, message: "Episode started" }, { status: 200 });
+                if (captureRow) {
+                    processIdeAsync({
+                        capture_id: captureRow.id, project_id: project_id ?? null, workspace_id: workspace_id ?? null, author_display_name, capture_type,
+                        ide_error_log: safePayload.initial_error_message ?? "", ide_code_diff: "", repo_tree: "", ide_file_path: "",
+                    }).catch(console.error);
                 }
-                case "IDE_DEBUG_EPISODE_UPDATE": {
-                    // 1. Update the background engine array
-                    const { error } = await supabase.rpc('append_debug_action', {
-                        p_episode_id: safePayload.episode_id,
-                        p_new_actions: safePayload.actions_log 
-                    });
-                    if (error) throw error;
+                return NextResponse.json({ success: true, message: "Episode started" }, { status: 200 });
+            }
 
-                    // 2. 🚨 ADDED: Drop an Orange visual card onto the timeline!
-                    await supabase.from("captures").insert({
-                        session_id,
-                        project_id: project_id ?? null,
-                        workspace_id: workspace_id ?? null,
-                        author_display_name: author_display_name,
-                        capture_type: "IDE_DEBUG_EPISODE_UPDATE",
-                        text_content: `🛠️ Actively debugging an issue...`,
-                        snapshot_metadata: safePayload // This ensures the frontend gets the latest actions_log array!
-                    });
+            // 2. BUG HUNT UPDATED (DEVELOPER TYPING COMMANDS / SAVING FILES)
+            case "IDE_DEBUG_EPISODE_UPDATE": {
+                const { error } = await supabase.rpc('append_debug_action', {
+                    p_episode_id: safePayload.episode_id,
+                    p_new_actions: safePayload.actions_log 
+                });
+                if (error) throw error;
 
-                    return NextResponse.json({ success: true, message: "Episode updated" }, { status: 200 });
+                await supabase.from("captures").insert({
+                    session_id, project_id: project_id ?? null, workspace_id: workspace_id ?? null,
+                    author_display_name: author_display_name, capture_type: "IDE_DEBUG_EPISODE_UPDATE",
+                    text_content: `🛠️ Actively debugging an issue...`,
+                    snapshot_metadata: safePayload 
+                });
+                return NextResponse.json({ success: true, message: "Episode updated" }, { status: 200 });
+            }
+
+            // 3. BUG HUNT RESOLVED
+            case "IDE_DEBUG_EPISODE_RESOLVED": {
+                if (!safePayload.fingerprint) return NextResponse.json({ error: "Missing fingerprint" }, { status: 400 });
+
+                await supabase.from("debug_episodes").update({ status: 'RESOLVED', timestamp_end: new Date().toISOString() }).eq('episode_id', safePayload.episode_id);
+
+                const { error } = await supabase.from("bug_knowledge_base").upsert({
+                    fingerprint: safePayload.fingerprint, resolution_command: safePayload.resolution_command,
+                    git_diff_fix: safePayload.git_diff_fix, local_diff_fix: safePayload.local_diff_fix, files_changed: safePayload.files_changed
+                });
+                if (error) throw error;
+
+                const { data: captureRow } = await supabase.from("captures").insert({
+                    session_id, project_id: project_id ?? null, workspace_id: workspace_id ?? null,
+                    author_display_name: author_display_name, capture_type: "IDE_DEBUG_EPISODE_RESOLVED",
+                    text_content: `✅ Bug successfully resolved!\nResolution Command: ${safePayload.resolution_command}`,
+                    ide_code_diff: safePayload.git_diff_fix, 
+                    snapshot_metadata: safePayload
+                }).select("id").single();
+
+                if (captureRow) {
+                    processIdeAsync({
+                        capture_id: captureRow.id, project_id: project_id ?? null, workspace_id: workspace_id ?? null, author_display_name, capture_type,
+                        ide_error_log: "", ide_code_diff: safePayload.git_diff_fix ?? "", repo_tree: "", ide_file_path: safePayload.files_changed?.[0] ?? "", 
+                    }).catch(console.error);
                 }
-                case "IDE_DEBUG_EPISODE_RESOLVED": {
-                    if (!safePayload.fingerprint) {
-                        return NextResponse.json({ error: "Missing fingerprint" }, { status: 400 });
-                    }
+                return NextResponse.json({ success: true, message: "Bug resolved" }, { status: 200 });
+            }
 
-                    await supabase.from("debug_episodes").update({
-                        status: 'RESOLVED',
-                        timestamp_end: new Date().toISOString()
-                    }).eq('episode_id', safePayload.episode_id);
+            // 4. ALL STANDARD SNAPSHOTS (INTERVAL & FINAL)
+            case "IDE_PROGRESS_SNAPSHOT":
+            case "IDE_SESSION_FINAL_SNAPSHOT":
+            case "IDE_BUG_FIX": {
+                // 🚨 MAGIC FIX: We aggressively map the payload diff and active files so the UI gets them
+                const finalCodeDiff = safePayload.git_diff_since_commit || ide_code_diff || null;
+                const finalRepoTree = safePayload.repo_tree || repo_tree || null;
+                const finalFilePath = safePayload.active_file || ide_file_path || null;
 
-                    const { error } = await supabase.from("bug_knowledge_base").upsert({
-                        fingerprint: safePayload.fingerprint,
-                        resolution_command: safePayload.resolution_command,
-                        git_diff_fix: safePayload.git_diff_fix,
-                        local_diff_fix: safePayload.local_diff_fix,
-                        files_changed: safePayload.files_changed
-                    });
-                    if (error) throw error;
+                const textParts: string[] = [];
+                if (finalFilePath) textParts.push(`**Active File:** \`${finalFilePath}\``);
+                if (ide_error_log) textParts.push(`**Error Log:**\n\`\`\`text\n${ide_error_log}\n\`\`\``);
+                if (finalCodeDiff) textParts.push(`**Code Changes:**\n\`\`\`diff\n${finalCodeDiff}\n\`\`\``);
+                if (finalRepoTree) textParts.push(`**Repository State:**\n\`\`\`text\n${finalRepoTree}\n\`\`\``);
+                
+                let defaultMsg = capture_type === "IDE_SESSION_FINAL_SNAPSHOT" ? "🏁 Session summary captured." : "📸 Progress snapshot logged.";
+                const initialTextContent = textParts.join("\n\n") || `*${defaultMsg}*`;
 
-                    // 🚨 DROPS CARD & TRIGGERS AI
-                    const { data: captureRow } = await supabase.from("captures").insert({
-                        session_id,
-                        project_id: project_id ?? null,
-                        workspace_id: workspace_id ?? null,
-                        author_display_name: author_display_name,
-                        capture_type: "IDE_DEBUG_EPISODE_RESOLVED",
-                        text_content: `✅ Bug successfully resolved!\nResolution Command: ${safePayload.resolution_command}`,
-                        ide_code_diff: safePayload.git_diff_fix, 
-                        snapshot_metadata: safePayload
-                    }).select("id").single();
+                const { data: captureRow, error: captureError } = await supabase.from("captures").insert({
+                    session_id,
+                    project_id: project_id ?? null,
+                    workspace_id: workspace_id ?? null,
+                    author_id: workspace_id ? user.id : null,
+                    author_display_name: author_display_name,
+                    capture_type,
+                    text_content: initialTextContent, 
+                    ai_markdown_summary: null, 
+                    ide_error_log: ide_error_log ?? null,
+                    ide_code_diff: finalCodeDiff, // Feeds the UI SyntaxHighlighter
+                    ide_file_path: finalFilePath,
+                    priority: priority ?? 0,
+                    snapshot_metadata: safePayload // 🚨 PUSHES ALL 15 FIELDS DIRECTLY TO THE UI PILLS
+                }).select("id").single();
 
-                    if (captureRow) {
-                        processIdeAsync({
-                            capture_id: captureRow.id,
-                            project_id: project_id ?? null,
-                            workspace_id: workspace_id ?? null,
-                            author_display_name,
-                            capture_type: "IDE_DEBUG_EPISODE_RESOLVED",
-                            ide_error_log: "",
-                            ide_code_diff: safePayload.git_diff_fix ?? "",
-                            repo_tree: "",
-                            ide_file_path: safePayload.files_changed?.[0] ?? "", 
-                        }).catch(console.error);
-                    }
+                if (captureError || !captureRow) return NextResponse.json({ error: captureError?.message ?? "Insert failed" }, { status: 500 });
 
-                    return NextResponse.json({ success: true, message: "Bug resolved" }, { status: 200 });
-                }
+                // Trigger AI
+                processIdeAsync({
+                    capture_id: captureRow.id,
+                    project_id: project_id ?? null,
+                    workspace_id: workspace_id ?? null,
+                    author_display_name,
+                    capture_type,
+                    ide_error_log: ide_error_log ?? "",
+                    ide_code_diff: finalCodeDiff ?? "",
+                    repo_tree: finalRepoTree ?? "",
+                    ide_file_path: finalFilePath ?? "",
+                }).catch((err) => console.error(`[ingest/ide] Async failed:`, err));
+
+                return NextResponse.json({ capture_id: captureRow.id }, { status: 200 });
             }
         }
-
-        // ─── EXISTING ARCHITECTURE: SNAPSHOTS & CAPTURES ──────────────────────
-        // Build a comprehensive preview for the frontend so it's not empty while Haiku thinks
-        const textParts: string[] = [];
-        if (ide_file_path) textParts.push(`**File:** \`${ide_file_path}\``);
-        if (ide_error_log) textParts.push(`**Error Log:**\n\`\`\`text\n${ide_error_log}\n\`\`\``);
-        if (ide_code_diff) textParts.push(`**Code Changes:**\n\`\`\`diff\n${ide_code_diff}\n\`\`\``);
-        if (repo_tree) textParts.push(`**Repository State:**\n\`\`\`text\n${repo_tree}\n\`\`\``);
-        
-        const initialTextContent = textParts.join("\n\n") || "*IDE snapshot captured with no distinct file changes.*";
-
-        // Insert into the existing captures table, but now utilizing the JSONB column
-        const { data: captureRow, error: captureError } = await supabase
-            .from("captures")
-            .insert({
-                session_id,
-                project_id: project_id ?? null,
-                workspace_id: workspace_id ?? null,
-                author_id: workspace_id ? user.id : null,
-                author_display_name: author_display_name,
-                capture_type,
-                text_content: initialTextContent, 
-                ai_markdown_summary: null, 
-                ide_error_log: ide_error_log ?? null,
-                ide_code_diff: ide_code_diff ?? null,
-                ide_file_path: ide_file_path ?? null,
-                priority: priority ?? 0,
-                // Inject the massive rich telemetry payload seamlessly
-                snapshot_metadata: {
-                    files_changed: safePayload.files_changed,
-                    files_added: safePayload.files_added,
-                    files_deleted: safePayload.files_deleted,
-                    lines_added: safePayload.lines_added,
-                    lines_removed: safePayload.lines_removed,
-                    modules_changed: safePayload.modules_changed,
-                    languages_detected: safePayload.languages_detected,
-                    open_files: safePayload.open_files,
-                    active_file: safePayload.active_file,
-                    session_duration: safePayload.session_duration,
-                    debug_episodes_count: safePayload.debug_episodes_count,
-                    resolved_bugs: safePayload.resolved_bugs,
-                    abandoned_bugs: safePayload.abandoned_bugs
-                }
-            })
-            .select("id")
-            .single();
-
-        if (captureError || !captureRow) return NextResponse.json({ error: captureError?.message ?? "Insert failed" }, { status: 500 });
-
-        const capture_id = captureRow.id;
-        const response = NextResponse.json({ capture_id }, { status: 200 });
-
-        // Trigger the Haiku & Titan embedding pipeline asynchronously
-        processIdeAsync({
-            capture_id,
-            project_id: project_id ?? null,
-            workspace_id: workspace_id ?? null,
-            author_display_name,
-            capture_type,
-            ide_error_log: ide_error_log ?? "",
-            ide_code_diff: ide_code_diff ?? "",
-            repo_tree: repo_tree ?? "",
-            ide_file_path: ide_file_path ?? "",
-        }).catch((err) => console.error(`[ingest/ide] Async pipeline failed for ${capture_id}:`, err));
-
-        return response;
     } catch (err) {
         if (err instanceof Response) return err;
         console.error("[POST /api/ingest/ide]", err);
