@@ -114,6 +114,14 @@ export async function POST(req: NextRequest) {
                     return NextResponse.json({ success: true, message: "Episode updated" }, { status: 200 });
                 }
                 case "IDE_DEBUG_EPISODE_RESOLVED": {
+                    // 🚨 Add this validation check!
+                    if (!safePayload.fingerprint) {
+                        return NextResponse.json(
+                            { error: "Missing 'fingerprint' in payload. Required for Bug Knowledge Base." }, 
+                            { status: 400 }
+                        );
+                    }
+
                     await supabase.from("debug_episodes").update({
                         status: 'RESOLVED',
                         timestamp_end: new Date().toISOString()
