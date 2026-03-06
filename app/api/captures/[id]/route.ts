@@ -12,6 +12,7 @@ interface RouteParams {
 // 2. Fetch all capture_attachments to get S3 URLs.
 // 3. Delete each S3 object (best-effort; log failures but continue).
 // 4. Delete the DB row — cascades to capture_attachments and capture_chunks.
+// 5. Delete associated debug_episode (Ghost Data Cleanup).
 // ---------------------------------------------------------------------------
 export async function DELETE(req: NextRequest, { params }: RouteParams) {
     try {
@@ -29,16 +30,19 @@ export async function DELETE(req: NextRequest, { params }: RouteParams) {
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         }
 
-        // Fetch the capture to check ownership and workspace
+        // Fetch the capture to check ownership, workspace, AND metadata for cleanup
         const { data: capture, error: captureError } = await supabase
             .from("captures")
-            .select("author_id, workspace_id")
+            .select("author_id, workspace_id, snapshot_metadata") // 🚨 ADDED snapshot_metadata
             .eq("id", id)
             .single();
 
         if (captureError || !capture) {
             return NextResponse.json({ error: "Capture not found" }, { status: 404 });
         }
+
+        // Extract episodeId for ghost data cleanup later
+        const episodeId = capture?.snapshot_metadata?.episode_id;
 
         let hasPermission = false;
 
@@ -109,6 +113,14 @@ export async function DELETE(req: NextRequest, { params }: RouteParams) {
 
         if (deleteError) {
             return NextResponse.json({ error: deleteError.message }, { status: 500 });
+        }
+
+        // 🚨 GHOST DATA CLEANUP: Delete the background tracking episode
+        if (episodeId) {
+            await adminSupabase
+                .from("debug_episodes")
+                .delete()
+                .eq("episode_id", episodeId);
         }
 
         return NextResponse.json({ success: true });
