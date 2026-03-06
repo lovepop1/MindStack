@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
             repo_tree,
             ide_file_path,
             priority,
-            payload // 🚨 Extracted for the rich JSON telemetry
+            payload 
         } = body as {
             session_id?: string;
             project_id?: string;
@@ -115,6 +115,7 @@ export async function POST(req: NextRequest) {
                     processIdeAsync({
                         capture_id: captureRow.id, project_id: project_id ?? null, workspace_id: workspace_id ?? null, author_display_name, capture_type,
                         ide_error_log: safePayload.initial_error_message ?? "", ide_code_diff: "", repo_tree: "", ide_file_path: "",
+                        payload: safePayload // 🚨 Passed to RAG
                     }).catch(console.error);
                 }
                 return NextResponse.json({ success: true, message: "Episode started" }, { status: 200 });
@@ -153,14 +154,15 @@ export async function POST(req: NextRequest) {
                     session_id, project_id: project_id ?? null, workspace_id: workspace_id ?? null,
                     author_display_name: author_display_name, capture_type: "IDE_DEBUG_EPISODE_RESOLVED",
                     text_content: `✅ Bug successfully resolved!\nResolution Command: ${safePayload.resolution_command}`,
-                    ide_code_diff: safePayload.git_diff_fix, 
+                    ide_code_diff: safePayload.local_diff_fix || safePayload.git_diff_fix, 
                     snapshot_metadata: safePayload
                 }).select("id").single();
 
                 if (captureRow) {
                     processIdeAsync({
                         capture_id: captureRow.id, project_id: project_id ?? null, workspace_id: workspace_id ?? null, author_display_name, capture_type,
-                        ide_error_log: "", ide_code_diff: safePayload.git_diff_fix ?? "", repo_tree: "", ide_file_path: safePayload.files_changed?.[0] ?? "", 
+                        ide_error_log: "", ide_code_diff: safePayload.local_diff_fix || safePayload.git_diff_fix || "", repo_tree: "", ide_file_path: safePayload.files_changed?.[0] ?? "", 
+                        payload: safePayload // 🚨 Passed to RAG
                     }).catch(console.error);
                 }
                 return NextResponse.json({ success: true, message: "Bug resolved" }, { status: 200 });
@@ -170,7 +172,6 @@ export async function POST(req: NextRequest) {
             case "IDE_PROGRESS_SNAPSHOT":
             case "IDE_SESSION_FINAL_SNAPSHOT":
             case "IDE_BUG_FIX": {
-                // 🚨 MAGIC FIX: We aggressively map the payload diff and active files so the UI gets them
                 const finalCodeDiff = safePayload.git_diff_since_commit || ide_code_diff || null;
                 const finalRepoTree = safePayload.repo_tree || repo_tree || null;
                 const finalFilePath = safePayload.active_file || ide_file_path || null;
@@ -194,15 +195,14 @@ export async function POST(req: NextRequest) {
                     text_content: initialTextContent, 
                     ai_markdown_summary: null, 
                     ide_error_log: ide_error_log ?? null,
-                    ide_code_diff: finalCodeDiff, // Feeds the UI SyntaxHighlighter
+                    ide_code_diff: finalCodeDiff,
                     ide_file_path: finalFilePath,
                     priority: priority ?? 0,
-                    snapshot_metadata: safePayload // 🚨 PUSHES ALL 15 FIELDS DIRECTLY TO THE UI PILLS
+                    snapshot_metadata: safePayload
                 }).select("id").single();
 
                 if (captureError || !captureRow) return NextResponse.json({ error: captureError?.message ?? "Insert failed" }, { status: 500 });
 
-                // Trigger AI
                 processIdeAsync({
                     capture_id: captureRow.id,
                     project_id: project_id ?? null,
@@ -213,6 +213,7 @@ export async function POST(req: NextRequest) {
                     ide_code_diff: finalCodeDiff ?? "",
                     repo_tree: finalRepoTree ?? "",
                     ide_file_path: finalFilePath ?? "",
+                    payload: safePayload // 🚨 Passed to RAG
                 }).catch((err) => console.error(`[ingest/ide] Async failed:`, err));
 
                 return NextResponse.json({ capture_id: captureRow.id }, { status: 200 });
@@ -238,14 +239,43 @@ async function processIdeAsync(args: {
     ide_code_diff: string;
     repo_tree: string;
     ide_file_path: string;
+    payload?: any; // 🚨 Added to signature
 }): Promise<void> {
     const admin = createAdminClient();
 
-    const rawContent = [
-        args.ide_error_log && `## Error Log\n${args.ide_error_log}`,
-        args.ide_code_diff && `## Code Diff\n${args.ide_code_diff}`,
-        args.repo_tree && `## Repo Structure\n${args.repo_tree}`,
-    ].filter(Boolean).join("\n\n");
+    // 🚨 MASSIVE UPGRADE: Unpack the JSON Payload for the RAG Model 🚨
+    const textParts: string[] = [];
+    
+    if (args.ide_file_path) textParts.push(`## Active File\n${args.ide_file_path}`);
+    if (args.ide_error_log || args.payload?.initial_error_message) textParts.push(`## Error Log\n${args.ide_error_log || args.payload?.initial_error_message}`);
+    if (args.payload?.initial_stacktrace) textParts.push(`## Stacktrace\n${args.payload.initial_stacktrace}`);
+    if (args.payload?.initial_command) textParts.push(`## Initial Command\n${args.payload.initial_command}`);
+    if (args.payload?.resolution_command) textParts.push(`## Resolution Command\n${args.payload.resolution_command}`);
+    
+    if (args.payload?.actions_log && Array.isArray(args.payload.actions_log)) {
+        const logStr = args.payload.actions_log.map((a: any) => `[${a.time || a.timestamp}] ${a.type === 'command' ? '$ ' + a.cmd : 'Saved ' + a.file}`).join('\n');
+        if (logStr) textParts.push(`## Debugging Timeline\n${logStr}`);
+    }
+
+    const diff = args.payload?.local_diff_fix || args.payload?.git_diff_fix || args.payload?.git_diff_since_commit || args.ide_code_diff;
+    if (diff) textParts.push(`## Code Diff\n${diff}`);
+    
+    if (args.payload?.files_changed) {
+        const fc = args.payload.files_changed;
+        if (Array.isArray(fc)) textParts.push(`## Files Changed\n${fc.join(', ')}`);
+        else textParts.push(`## Files Changed Count\n${fc}`);
+    }
+    
+    if (args.payload?.modules_changed && Array.isArray(args.payload.modules_changed)) textParts.push(`## Modules Changed\n${args.payload.modules_changed.join(', ')}`);
+    if (args.payload?.languages_detected && Array.isArray(args.payload.languages_detected)) textParts.push(`## Languages Used\n${args.payload.languages_detected.join(', ')}`);
+    
+    if (args.payload?.session_duration !== undefined) {
+        textParts.push(`## Session Metrics\nDuration: ${args.payload.session_duration}s\nBugs Encountered: ${args.payload.debug_episodes_count || 0}\nBugs Resolved: ${args.payload.resolved_bugs || 0}\nBugs Abandoned: ${args.payload.abandoned_bugs || 0}`);
+    }
+    
+    if (args.repo_tree) textParts.push(`## Repo Structure\n${args.repo_tree}`);
+
+    const rawContent = textParts.join("\n\n");
 
     if (!rawContent.trim()) return;
 
@@ -275,7 +305,6 @@ async function processIdeAsync(args: {
 
         plainEnglishExplanation = await invokeClaudeHaiku(translationPrompt);
 
-        // Update the database so the frontend UI can show the Haiku summary
         await admin
             .from("captures")
             .update({ ai_markdown_summary: plainEnglishExplanation })
@@ -288,7 +317,6 @@ async function processIdeAsync(args: {
     const rawChunks = chunkText(rawContent, { fileName: args.ide_file_path || undefined });
     const englishChunks = plainEnglishExplanation ? chunkText(plainEnglishExplanation) : [];
 
-    // Combine both sets, labeling them for retrieval context
     const allTextChunks = [
         ...rawChunks.map((c) => `[RAW CODE]\n${c}`),
         ...englishChunks.map((c) => `[EXPLANATION]\n${c}`),

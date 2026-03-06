@@ -180,6 +180,7 @@ export async function POST(req: NextRequest) {
             text_content: final_text_content ?? "",
             caption_text,
             source_url: source_url ?? "",
+            page_title: page_title ?? null, // 🚨 Now properly passed to async function
             video_start_time,
             video_end_time,
             attachments,
@@ -208,6 +209,7 @@ async function processBrowserCaptureAsync(args: {
     text_content: string;
     caption_text?: string;
     source_url: string;
+    page_title?: string | null; // 🚨 Added to signature
     video_start_time?: number;
     video_end_time?: number;
     attachments?: { file_type: string; file_name: string }[];
@@ -311,12 +313,17 @@ async function processBrowserCaptureAsync(args: {
 
     for (let i = 0; i < chunks.length; i++) {
         try {
-            // CRITICAL: Prepend author attribution for workspace captures
-            let chunkTextData = chunks[i];
+            // 🚨 APPLIED FIX: Advanced descriptive chunk header
+            let metadataHeader = `[Context: Saved ${args.capture_type.replace(/_/g, " ")}]`;
+            if (args.page_title) {
+                metadataHeader += `\n[Source Title: ${args.page_title}]`;
+            }
             if (args.workspace_id && args.author_display_name) {
-                chunkTextData = `[Contributed by: ${args.author_display_name}]\n\n${chunks[i]}`;
+                metadataHeader += `\n[Contributed by: ${args.author_display_name}]`;
             }
 
+            const chunkTextData = `${metadataHeader}\n\n${chunks[i]}`;
+            
             const embedding = await invokeTitanEmbedding(chunkTextData);
             chunkRows.push({
                 capture_id: args.capture_id,
