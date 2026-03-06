@@ -112,6 +112,7 @@ export async function POST(req: NextRequest) {
                         author_display_name: author_display_name,
                         capture_type: "IDE_DEBUG_EPISODE_START",
                         text_content: `🚨 Started bug hunt.\nCommand: ${safePayload.initial_command}\nError: ${safePayload.initial_error_message}`,
+                        snapshot_metadata: safePayload
                     }).select("id").single();
 
                     if (captureRow) {
@@ -131,11 +132,24 @@ export async function POST(req: NextRequest) {
                     return NextResponse.json({ success: true, message: "Episode started" }, { status: 200 });
                 }
                 case "IDE_DEBUG_EPISODE_UPDATE": {
+                    // 1. Update the background engine array
                     const { error } = await supabase.rpc('append_debug_action', {
                         p_episode_id: safePayload.episode_id,
                         p_new_actions: safePayload.actions_log 
                     });
                     if (error) throw error;
+
+                    // 2. 🚨 ADDED: Drop an Orange visual card onto the timeline!
+                    await supabase.from("captures").insert({
+                        session_id,
+                        project_id: project_id ?? null,
+                        workspace_id: workspace_id ?? null,
+                        author_display_name: author_display_name,
+                        capture_type: "IDE_DEBUG_EPISODE_UPDATE",
+                        text_content: `🛠️ Actively debugging an issue...`,
+                        snapshot_metadata: safePayload // This ensures the frontend gets the latest actions_log array!
+                    });
+
                     return NextResponse.json({ success: true, message: "Episode updated" }, { status: 200 });
                 }
                 case "IDE_DEBUG_EPISODE_RESOLVED": {
@@ -166,6 +180,7 @@ export async function POST(req: NextRequest) {
                         capture_type: "IDE_DEBUG_EPISODE_RESOLVED",
                         text_content: `✅ Bug successfully resolved!\nResolution Command: ${safePayload.resolution_command}`,
                         ide_code_diff: safePayload.git_diff_fix, 
+                        snapshot_metadata: safePayload
                     }).select("id").single();
 
                     if (captureRow) {
@@ -286,24 +301,26 @@ async function processIdeAsync(args: {
     // -- Step 1: Haiku 4.5 translates raw code/error → plain English explanation --
     let plainEnglishExplanation = "";
     try {
-        const translationPrompt = `You are an expert Staff Engineer acting as an omniscient "Second Brain" memory engine for a developer. 
-Analyze the following raw IDE output (which may include error logs, git diffs, repository structures, or session telemetry) and synthesize it into a highly searchable, plain-English summary.
+        const translationPrompt = `You are a Staff Engineer AI building an automated dev log.
+    Analyze the following raw IDE output (error logs, code diffs, or snapshot telemetry) and synthesize it.
 
-Adapt your analysis based on what the data actually represents:
-- IF IT IS A BUG FIX / CRASH: Identify the root cause of the error and explain exactly how the code changes resolved it.
-- IF IT IS NEW FEATURE WORK / REFACTORING: Summarize what new functionality was built, or how the architecture was improved, based purely on the code diffs.
-- IF IT IS A PROGRESS SNAPSHOT: Provide a high-level overview of the files touched and the momentum of the session.
+    CRITICAL RULES:
+    1. ABSOLUTELY NO APOLOGIES OR FILLER. Never say "I don't have enough information," "I cannot see," or "There is no diff."
+    2. BE RUTHLESSLY CONCISE. Maximum 3 sentences total.
+    3. If data is sparse or empty, output exactly this generic baseline: "Routine IDE state capture."
 
-Output EXACTLY these two sections formatted in Markdown:
+    Adapt your focus based on the data provided:
+    - IF BUG FIX/CRASH: State the error root cause and how the diff fixed it.
+    - IF NEW FEATURE: State what functionality was built based on the diff.
+    - IF PROGRESS SNAPSHOT: State which files were modified.
 
-1. **Context & Execution**: A clear, plain-English explanation of the situation and the exact actions the developer took. (Use inline code blocks for critical variables, function names, or file names).
-2. **Key Takeaway**: A 1-2 sentence technical summary of the underlying concept, design pattern, or library used. (This makes the knowledge easily retrievable for future AI semantic searches).
+    Output EXACTLY these two sections formatted in Markdown:
+    1. **Execution**: 1-2 sentence maximum explanation of the actions taken.
+    2. **Key Takeaway**: 1 sentence maximum summarizing the core library, concept, or pattern used (for search indexing).
 
-Be concise, highly precise, and professional. Do not invent or hallucinate context outside of the provided data.
-
----
-RAW IDE TELEMETRY:
-${rawContent.slice(0, 15000)}`;
+    ---
+    RAW IDE TELEMETRY:
+    ${rawContent.slice(0, 15000)}`;
 
         plainEnglishExplanation = await invokeClaudeHaiku(translationPrompt);
 
