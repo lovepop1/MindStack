@@ -103,6 +103,14 @@ export async function POST(req: NextRequest) {
                         initial_stacktrace: safePayload.initial_stacktrace,
                     });
                     if (error) throw error;
+                    await supabase.from("captures").insert({
+                        session_id,
+                        project_id: project_id ?? null,
+                        workspace_id: workspace_id ?? null,
+                        author_display_name: author_display_name,
+                        capture_type: "IDE_DEBUG_EPISODE_START",
+                        text_content: `🚨 Started bug hunt.\nError: ${safePayload.initial_error_message}`,
+                    });
                     return NextResponse.json({ success: true, message: "Episode started" }, { status: 200 });
                 }
                 case "IDE_DEBUG_EPISODE_UPDATE": {
@@ -135,6 +143,16 @@ export async function POST(req: NextRequest) {
                         files_changed: safePayload.files_changed
                     });
                     if (error) throw error;
+                    // 🚨 ADD THIS: Drop a visual card into the timeline showing the fix!
+                    await supabase.from("captures").insert({
+                        session_id,
+                        project_id: project_id ?? null,
+                        workspace_id: workspace_id ?? null,
+                        author_display_name: author_display_name,
+                        capture_type: "IDE_DEBUG_EPISODE_RESOLVED",
+                        text_content: `✅ Bug successfully resolved!\nCommand: ${safePayload.resolution_command}`,
+                        ide_code_diff: safePayload.git_diff_fix, // Show the exact code that fixed it!
+                    });
                     return NextResponse.json({ success: true, message: "Bug resolved" }, { status: 200 });
                 }
             }
