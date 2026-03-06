@@ -231,13 +231,23 @@ async function processIdeAsync(args: {
     // -- Step 1: Haiku 4.5 translates raw code/error → plain English explanation --
     let plainEnglishExplanation = "";
     try {
-        const translationPrompt = `You are a senior developer assistant. Below is raw IDE output from a developer's coding session.
-Convert this into two things, formatted in Markdown:
-1. **Plain-English Explanation**: What problem occurred and how it was (or is being) resolved.
-2. **Key Learning**: The underlying technical concept or pattern involved.
-Be concise but precise. Use code blocks for any code references.
+        const translationPrompt = `You are an expert Staff Engineer acting as an omniscient "Second Brain" memory engine for a developer. 
+Analyze the following raw IDE output (which may include error logs, git diffs, repository structures, or session telemetry) and synthesize it into a highly searchable, plain-English summary.
+
+Adapt your analysis based on what the data actually represents:
+- IF IT IS A BUG FIX / CRASH: Identify the root cause of the error and explain exactly how the code changes resolved it.
+- IF IT IS NEW FEATURE WORK / REFACTORING: Summarize what new functionality was built, or how the architecture was improved, based purely on the code diffs.
+- IF IT IS A PROGRESS SNAPSHOT: Provide a high-level overview of the files touched and the momentum of the session.
+
+Output EXACTLY these two sections formatted in Markdown:
+
+1. **Context & Execution**: A clear, plain-English explanation of the situation and the exact actions the developer took. (Use inline code blocks for critical variables, function names, or file names).
+2. **Key Takeaway**: A 1-2 sentence technical summary of the underlying concept, design pattern, or library used. (This makes the knowledge easily retrievable for future AI semantic searches).
+
+Be concise, highly precise, and professional. Do not invent or hallucinate context outside of the provided data.
 
 ---
+RAW IDE TELEMETRY:
 ${rawContent.slice(0, 15000)}`;
 
         plainEnglishExplanation = await invokeClaudeHaiku(translationPrompt);
