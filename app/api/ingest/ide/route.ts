@@ -1,17 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAuthClient, createAdminClient, extractJwt } from "@/lib/supabase";
-import { invokeClaudeHaiku, invokeTitanEmbedding } from "@/lib/bedrock"; // ✅ Haiku is back!
+import { invokeClaudeHaiku, invokeTitanEmbedding } from "@/lib/bedrock"; 
 import { chunkText } from "@/lib/chunker";
 
 // ---------------------------------------------------------------------------
-// Allowed IDE capture types
+// Allowed IDE capture types (Expanded for Telemetry)
 // ---------------------------------------------------------------------------
-type IdeCaptureType = "IDE_BUG_FIX" | "IDE_PROGRESS_SNAPSHOT";
+type IdeCaptureType = 
+    | "IDE_BUG_FIX" 
+    | "IDE_PROGRESS_SNAPSHOT"
+    | "IDE_SESSION_FINAL_SNAPSHOT"
+    | "IDE_DEBUG_EPISODE_START"
+    | "IDE_DEBUG_EPISODE_UPDATE"
+    | "IDE_DEBUG_EPISODE_RESOLVED";
 
 // ---------------------------------------------------------------------------
 // POST /api/ingest/ide
-// Sync: Insert beautifully formatted capture, return 200.
-// Async: Haiku translates the code. BOTH raw code and translation are embedded.
 // ---------------------------------------------------------------------------
 export async function POST(req: NextRequest) {
     try {
@@ -38,6 +42,7 @@ export async function POST(req: NextRequest) {
             repo_tree,
             ide_file_path,
             priority,
+            payload // NEW: Extracted for the rich JSON telemetry
         } = body as {
             session_id?: string;
             project_id?: string;
@@ -48,6 +53,7 @@ export async function POST(req: NextRequest) {
             repo_tree?: string;
             ide_file_path?: string;
             priority?: number;
+            payload?: any; 
         };
 
         if (!session_id || !capture_type) {
@@ -58,7 +64,10 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: "Either `project_id` or `workspace_id` is required" }, { status: 400 });
         }
 
-        const validTypes: IdeCaptureType[] = ["IDE_BUG_FIX", "IDE_PROGRESS_SNAPSHOT"];
+        const validTypes: IdeCaptureType[] = [
+            "IDE_BUG_FIX", "IDE_PROGRESS_SNAPSHOT", "IDE_SESSION_FINAL_SNAPSHOT",
+            "IDE_DEBUG_EPISODE_START", "IDE_DEBUG_EPISODE_UPDATE", "IDE_DEBUG_EPISODE_RESOLVED"
+        ];
         if (!validTypes.includes(capture_type)) {
             return NextResponse.json({ error: `Invalid capture_type: ${capture_type}` }, { status: 400 });
         }
@@ -76,6 +85,54 @@ export async function POST(req: NextRequest) {
             author_display_name = member.display_name;
         }
 
+        const safePayload = payload || {};
+
+        // ─── NEW ARCHITECTURE: INTELLIGENT DEBUG EPISODES ────────────────────
+        // These route directly to the new relational tables and return 200 immediately.
+        if (capture_type.startsWith("IDE_DEBUG_EPISODE")) {
+            switch (capture_type) {
+                case "IDE_DEBUG_EPISODE_START": {
+                    const { error } = await supabase.from("debug_episodes").insert({
+                        episode_id: safePayload.episode_id,
+                        session_id,
+                        project_id: project_id ?? null,
+                        workspace_id: workspace_id ?? null,
+                        status: 'DEBUGGING',
+                        initial_command: safePayload.initial_command,
+                        initial_error_message: safePayload.initial_error_message,
+                        initial_stacktrace: safePayload.initial_stacktrace,
+                    });
+                    if (error) throw error;
+                    return NextResponse.json({ success: true, message: "Episode started" }, { status: 200 });
+                }
+                case "IDE_DEBUG_EPISODE_UPDATE": {
+                    const { error } = await supabase.rpc('append_debug_action', {
+                        p_episode_id: safePayload.episode_id,
+                        p_new_actions: safePayload.actions_log 
+                    });
+                    if (error) throw error;
+                    return NextResponse.json({ success: true, message: "Episode updated" }, { status: 200 });
+                }
+                case "IDE_DEBUG_EPISODE_RESOLVED": {
+                    await supabase.from("debug_episodes").update({
+                        status: 'RESOLVED',
+                        timestamp_end: new Date().toISOString()
+                    }).eq('episode_id', safePayload.episode_id);
+
+                    const { error } = await supabase.from("bug_knowledge_base").upsert({
+                        fingerprint: safePayload.fingerprint,
+                        resolution_command: safePayload.resolution_command,
+                        git_diff_fix: safePayload.git_diff_fix,
+                        local_diff_fix: safePayload.local_diff_fix,
+                        files_changed: safePayload.files_changed
+                    });
+                    if (error) throw error;
+                    return NextResponse.json({ success: true, message: "Bug resolved" }, { status: 200 });
+                }
+            }
+        }
+
+        // ─── EXISTING ARCHITECTURE: SNAPSHOTS & CAPTURES ──────────────────────
         // Build a comprehensive preview for the frontend so it's not empty while Haiku thinks
         const textParts: string[] = [];
         if (ide_file_path) textParts.push(`**File:** \`${ide_file_path}\``);
@@ -85,6 +142,7 @@ export async function POST(req: NextRequest) {
         
         const initialTextContent = textParts.join("\n\n") || "*IDE snapshot captured with no distinct file changes.*";
 
+        // Insert into the existing captures table, but now utilizing the JSONB column
         const { data: captureRow, error: captureError } = await supabase
             .from("captures")
             .insert({
@@ -95,11 +153,27 @@ export async function POST(req: NextRequest) {
                 author_display_name: author_display_name,
                 capture_type,
                 text_content: initialTextContent, 
-                ai_markdown_summary: null, // Haiku will update this asynchronously
+                ai_markdown_summary: null, 
                 ide_error_log: ide_error_log ?? null,
                 ide_code_diff: ide_code_diff ?? null,
                 ide_file_path: ide_file_path ?? null,
                 priority: priority ?? 0,
+                // Inject the massive rich telemetry payload seamlessly
+                snapshot_metadata: {
+                    files_changed: safePayload.files_changed,
+                    files_added: safePayload.files_added,
+                    files_deleted: safePayload.files_deleted,
+                    lines_added: safePayload.lines_added,
+                    lines_removed: safePayload.lines_removed,
+                    modules_changed: safePayload.modules_changed,
+                    languages_detected: safePayload.languages_detected,
+                    open_files: safePayload.open_files,
+                    active_file: safePayload.active_file,
+                    session_duration: safePayload.session_duration,
+                    debug_episodes_count: safePayload.debug_episodes_count,
+                    resolved_bugs: safePayload.resolved_bugs,
+                    abandoned_bugs: safePayload.abandoned_bugs
+                }
             })
             .select("id")
             .single();
@@ -109,6 +183,7 @@ export async function POST(req: NextRequest) {
         const capture_id = captureRow.id;
         const response = NextResponse.json({ capture_id }, { status: 200 });
 
+        // Trigger the Haiku & Titan embedding pipeline asynchronously
         processIdeAsync({
             capture_id,
             project_id: project_id ?? null,
@@ -153,7 +228,7 @@ async function processIdeAsync(args: {
 
     if (!rawContent.trim()) return;
 
-    // -- Step 1: Haiku translates raw code/error → plain English explanation --
+    // -- Step 1: Haiku 4.5 translates raw code/error → plain English explanation --
     let plainEnglishExplanation = "";
     try {
         const translationPrompt = `You are a senior developer assistant. Below is raw IDE output from a developer's coding session.
@@ -197,7 +272,7 @@ ${rawContent.slice(0, 15000)}`;
         chunk_index: number;
     }[] = [];
 
-    // -- Step 3: Embed + Save ------------------------------------------------
+    // -- Step 3: Embed (Titan v2) + Save ---------------------------------------
     for (let i = 0; i < allTextChunks.length; i++) {
         try {
             let metadataHeader = `[Context: The developer captured a ${args.capture_type.replace(/_/g, " ")}]`;
