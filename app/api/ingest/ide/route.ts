@@ -86,6 +86,9 @@ export async function POST(req: NextRequest) {
         }
 
         const safePayload = payload || {};
+        
+        // 🚨 UNIFIED DIFF EXTRACTION: Ensures we don't miss the diff regardless of payload structure
+        const bestAvailableDiff = safePayload.local_diff_fix || safePayload.git_diff_fix || safePayload.git_diff_since_commit || ide_code_diff || null;
 
         // ─── MASTER ROUTER: HANDLES ALL 6 TELEMETRY TYPES CLEANLY ────────────────────
         switch (capture_type) {
@@ -114,8 +117,8 @@ export async function POST(req: NextRequest) {
                 if (captureRow) {
                     processIdeAsync({
                         capture_id: captureRow.id, project_id: project_id ?? null, workspace_id: workspace_id ?? null, author_display_name, capture_type,
-                        ide_error_log: safePayload.initial_error_message ?? "", ide_code_diff: "", repo_tree: "", ide_file_path: "",
-                        payload: safePayload // 🚨 Passed to RAG
+                        ide_error_log: safePayload.initial_error_message ?? "", ide_code_diff: bestAvailableDiff ?? "", repo_tree: "", ide_file_path: "",
+                        payload: safePayload 
                     }).catch(console.error);
                 }
                 return NextResponse.json({ success: true, message: "Episode started" }, { status: 200 });
@@ -154,15 +157,15 @@ export async function POST(req: NextRequest) {
                     session_id, project_id: project_id ?? null, workspace_id: workspace_id ?? null,
                     author_display_name: author_display_name, capture_type: "IDE_DEBUG_EPISODE_RESOLVED",
                     text_content: `✅ Bug successfully resolved!\nResolution Command: ${safePayload.resolution_command}`,
-                    ide_code_diff: safePayload.local_diff_fix || safePayload.git_diff_fix, 
+                    ide_code_diff: bestAvailableDiff, 
                     snapshot_metadata: safePayload
                 }).select("id").single();
 
                 if (captureRow) {
                     processIdeAsync({
                         capture_id: captureRow.id, project_id: project_id ?? null, workspace_id: workspace_id ?? null, author_display_name, capture_type,
-                        ide_error_log: "", ide_code_diff: safePayload.local_diff_fix || safePayload.git_diff_fix || "", repo_tree: "", ide_file_path: safePayload.files_changed?.[0] ?? "", 
-                        payload: safePayload // 🚨 Passed to RAG
+                        ide_error_log: "", ide_code_diff: bestAvailableDiff ?? "", repo_tree: "", ide_file_path: safePayload.files_changed?.[0] ?? "", 
+                        payload: safePayload 
                     }).catch(console.error);
                 }
                 return NextResponse.json({ success: true, message: "Bug resolved" }, { status: 200 });
@@ -172,14 +175,13 @@ export async function POST(req: NextRequest) {
             case "IDE_PROGRESS_SNAPSHOT":
             case "IDE_SESSION_FINAL_SNAPSHOT":
             case "IDE_BUG_FIX": {
-                const finalCodeDiff = safePayload.git_diff_since_commit || ide_code_diff || null;
                 const finalRepoTree = safePayload.repo_tree || repo_tree || null;
                 const finalFilePath = safePayload.active_file || ide_file_path || null;
 
                 const textParts: string[] = [];
                 if (finalFilePath) textParts.push(`**Active File:** \`${finalFilePath}\``);
                 if (ide_error_log) textParts.push(`**Error Log:**\n\`\`\`text\n${ide_error_log}\n\`\`\``);
-                if (finalCodeDiff) textParts.push(`**Code Changes:**\n\`\`\`diff\n${finalCodeDiff}\n\`\`\``);
+                if (bestAvailableDiff) textParts.push(`**Code Changes:**\n\`\`\`diff\n${bestAvailableDiff}\n\`\`\``);
                 if (finalRepoTree) textParts.push(`**Repository State:**\n\`\`\`text\n${finalRepoTree}\n\`\`\``);
                 
                 let defaultMsg = capture_type === "IDE_SESSION_FINAL_SNAPSHOT" ? "🏁 Session summary captured." : "📸 Progress snapshot logged.";
@@ -195,7 +197,7 @@ export async function POST(req: NextRequest) {
                     text_content: initialTextContent, 
                     ai_markdown_summary: null, 
                     ide_error_log: ide_error_log ?? null,
-                    ide_code_diff: finalCodeDiff,
+                    ide_code_diff: bestAvailableDiff,
                     ide_file_path: finalFilePath,
                     priority: priority ?? 0,
                     snapshot_metadata: safePayload
@@ -210,10 +212,10 @@ export async function POST(req: NextRequest) {
                     author_display_name,
                     capture_type,
                     ide_error_log: ide_error_log ?? "",
-                    ide_code_diff: finalCodeDiff ?? "",
+                    ide_code_diff: bestAvailableDiff ?? "",
                     repo_tree: finalRepoTree ?? "",
                     ide_file_path: finalFilePath ?? "",
-                    payload: safePayload // 🚨 Passed to RAG
+                    payload: safePayload 
                 }).catch((err) => console.error(`[ingest/ide] Async failed:`, err));
 
                 return NextResponse.json({ capture_id: captureRow.id }, { status: 200 });
@@ -239,15 +241,21 @@ async function processIdeAsync(args: {
     ide_code_diff: string;
     repo_tree: string;
     ide_file_path: string;
-    payload?: any; // 🚨 Added to signature
+    payload?: any; 
 }): Promise<void> {
     const admin = createAdminClient();
 
-    // 🚨 MASSIVE UPGRADE: Unpack the JSON Payload for the RAG Model 🚨
     const textParts: string[] = [];
     
+    // 🚨 FIX: Priority ordering. Code Diff comes right after the error log 
+    // so it NEVER gets truncated by rawContent.slice(0, 15000) when there are massive stacktraces.
     if (args.ide_file_path) textParts.push(`## Active File\n${args.ide_file_path}`);
     if (args.ide_error_log || args.payload?.initial_error_message) textParts.push(`## Error Log\n${args.ide_error_log || args.payload?.initial_error_message}`);
+    
+    const diff = args.ide_code_diff || args.payload?.local_diff_fix || args.payload?.git_diff_fix || args.payload?.git_diff_since_commit;
+    if (diff) textParts.push(`## Code Diff\n${diff}`);
+
+    // Now push the potentially massive outputs lower down
     if (args.payload?.initial_stacktrace) textParts.push(`## Stacktrace\n${args.payload.initial_stacktrace}`);
     if (args.payload?.initial_command) textParts.push(`## Initial Command\n${args.payload.initial_command}`);
     if (args.payload?.resolution_command) textParts.push(`## Resolution Command\n${args.payload.resolution_command}`);
@@ -256,9 +264,6 @@ async function processIdeAsync(args: {
         const logStr = args.payload.actions_log.map((a: any) => `[${a.time || a.timestamp}] ${a.type === 'command' ? '$ ' + a.cmd : 'Saved ' + a.file}`).join('\n');
         if (logStr) textParts.push(`## Debugging Timeline\n${logStr}`);
     }
-
-    const diff = args.payload?.local_diff_fix || args.payload?.git_diff_fix || args.payload?.git_diff_since_commit || args.ide_code_diff;
-    if (diff) textParts.push(`## Code Diff\n${diff}`);
     
     if (args.payload?.files_changed) {
         const fc = args.payload.files_changed;
