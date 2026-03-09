@@ -11,9 +11,9 @@ MindStack is an advanced multi-surface AI ingestion engine and multimodal query 
 - **Database:** Supabase (PostgreSQL with `pgvector` for vector embeddings)
 - **Object Storage:** Amazon S3 (for media blobs, PDFs, and video keyframes)
 - **AI / LLMs:** Amazon Bedrock
-  - **Claude 3 Haiku:** Asynchronous plain-English translation of massive IDE terminal splats and code diffs.
+  - **Claude 4.5 Haiku:** Asynchronous plain-English translation of massive IDE terminal splats and code diffs.
   - **Amazon Titan Embeddings V2:** High-dimensional (1024-dim) semantic vector generation of chunked resources.
-  - **Claude 3.7 Sonnet:** The multimodal, highly-intelligent chat engine capable of rendering text, images, and synthesizing context files via an active Server-Sent Events (SSE) stream.
+  - **Claude 4.6 Sonnet:** The multimodal, highly-intelligent chat engine capable of rendering text, images, and synthesizing context files via an active Server-Sent Events (SSE) stream.
 - **Language:** TypeScript
 - **Styling:** Tailwind CSS
 
